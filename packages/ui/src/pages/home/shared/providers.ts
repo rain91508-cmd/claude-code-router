@@ -778,6 +778,7 @@ export function createProviderDraftFromProvider(provider: GatewayProviderConfig)
     credentialMode: providerDraftHasReadyCredentialPool({ credentials }) ? "pool" : "apiKey",
     credentials,
     icon: provider.icon ?? "",
+    protocolsManuallyEdited: false,
     modelDescriptions: modelDescriptionsForModels(provider.modelDescriptions, provider.models),
     modelDisplayNames: modelDisplayNamesForModels(
       mergeModelDisplayNames(providerPresetModelDisplayNames(preset), provider.modelDisplayNames),
@@ -1990,10 +1991,23 @@ export function providerCapabilitiesForSave(
   const normalizedNextBaseUrl = normalizeProviderBaseUrl(nextBaseUrl) || nextBaseUrl.trim();
   const preserveExisting = normalizedExistingBaseUrl === undefined ||
     normalizedExistingBaseUrl === normalizedNextBaseUrl;
-  return mergeProviderCapabilities(
-    currentCapabilities,
-    ...(preserveExisting ? [preservedCapabilities] : [])
-  );
+  if (!preserveExisting) {
+    return mergeProviderCapabilities(currentCapabilities);
+  }
+  // Preserve extra/undetected endpoints (e.g. secondary media origins) so they
+  // survive a base-URL-preserving save. But drop a capability whose protocol is
+  // a user-selectable (non-media) protocol that is no longer selected — this
+  // honors a manual deselection made in the edit form, where the draft's
+  // capabilities still list the deselected protocol.
+  const preserved = preservedCapabilities.filter((capability) => {
+    if (capability.type === "openai_image_generations" ||
+      capability.type === "openai_video_generations" ||
+      capability.type === "xai_video_generations") {
+      return true;
+    }
+    return currentCapabilities.some((current) => current.type === capability.type);
+  });
+  return mergeProviderCapabilities(currentCapabilities, preserved);
 }
 
 export function providerGlobalBaseUrlForProbe(

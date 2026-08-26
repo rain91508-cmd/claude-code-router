@@ -145,6 +145,35 @@ test("provider save keeps explicit secondary media origins when the base URL is 
   );
 });
 
+test("provider save drops a deselected protocol from preserved capabilities (edit path)", () => {
+  const current = [
+    {
+      baseUrl: "https://api.example/v1",
+      source: "detected" as const,
+      type: "openai_chat_completions" as const
+    }
+  ];
+  const preserved = [
+    {
+      baseUrl: "https://api.example/v1",
+      source: "detected" as const,
+      type: "openai_chat_completions" as const
+    },
+    {
+      baseUrl: "https://api.example/anthropic",
+      source: "detected" as const,
+      type: "anthropic_messages" as const
+    }
+  ];
+
+  // base URL unchanged -> preserved endpoints are merged, but the deselected
+  // anthropic_messages capability must NOT be re-added.
+  assert.deepEqual(
+    providerCapabilitiesForSave(current, preserved, "https://api.example/v1", "https://api.example/v1"),
+    current
+  );
+});
+
 test("provider probe result drops unavailable selected protocols", () => {
   const draft = {
     ...createProviderDraft([]),
@@ -1315,6 +1344,50 @@ test("manual protocol deselection survives probe when manually edited", () => {
   };
 
   const next = applyProviderProbeResult(draft, probe);
+
+  assert.deepEqual(next.selectedProtocols, ["openai_chat_completions"]);
+});
+
+test("edit draft initializes protocolsManuallyEdited so it matches add behavior", () => {
+  const provider = {
+    account: { type: "apiKey", apiKey: "sk-test" },
+    apiKey: "sk-test",
+    autoFetchModels: false,
+    baseUrl: "https://api.moonshot.ai/v1",
+    capabilities: [
+      { baseUrl: "https://api.moonshot.ai/anthropic", protocol: "anthropic_messages", supported: true },
+      { baseUrl: "https://api.moonshot.ai/v1", protocol: "openai_chat_completions", supported: true }
+    ],
+    enabled: true,
+    icon: "",
+    models: ["x"],
+    name: "Moonshot Edit",
+    provider: "openai",
+    type: "openai_chat_completions",
+    protocolDetectionMode: "auto"
+  } as unknown as import("@ccr/ui/pages/home/shared/index.tsx").GatewayProviderConfig;
+
+  const draft = createProviderDraftFromProvider(provider);
+
+  assert.equal((draft as any).protocolsManuallyEdited, false);
+
+  const probe = {
+    capabilities: [
+      { baseUrl: "https://api.moonshot.ai/anthropic", endpoint: "https://api.moonshot.ai/anthropic/v1/messages", source: "detected" as const, type: "anthropic_messages" as const },
+      { baseUrl: "https://api.moonshot.ai/v1", source: "preset" as const, type: "openai_chat_completions" as const }
+    ],
+    detectedProtocol: "anthropic_messages" as const,
+    models: [],
+    normalizedBaseUrl: "https://api.moonshot.ai/anthropic",
+    protocols: [
+      { endpoint: "https://api.moonshot.ai/anthropic/v1/messages", message: "HTTP 400: model is required", protocol: "anthropic_messages" as const, status: 400, supported: true },
+      { endpoint: "https://api.moonshot.ai/v1", message: "", protocol: "openai_chat_completions" as const, status: 200, supported: true }
+    ]
+  };
+
+  // user deselects anthropic, then a probe re-fires (e.g. editing the api key)
+  const edited = { ...draft, protocolsManuallyEdited: true, selectedProtocols: ["openai_chat_completions"] } as any;
+  const next = applyProviderProbeResult(edited, probe);
 
   assert.deepEqual(next.selectedProtocols, ["openai_chat_completions"]);
 });

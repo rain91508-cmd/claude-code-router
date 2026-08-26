@@ -2043,6 +2043,7 @@ export function AddProviderForm({
 
   function updateAutoProtocolDetection(enabled: boolean) {
     onChange({
+      protocolsManuallyEdited: !enabled,
       protocolDetectionMode: enabled ? "auto" : "manual",
       selectedProtocols: !enabled && draft.selectedProtocols.length === 0
         ? [draft.protocol]
@@ -2148,6 +2149,7 @@ export function AddProviderForm({
         modelMetadata: undefined,
         modelSearch: "",
         presetId,
+        protocolsManuallyEdited: false,
         providerPlugins: [],
         selectedModels: [],
         selectedProtocols: []
@@ -2166,6 +2168,7 @@ export function AddProviderForm({
         modelMetadata: undefined,
         modelSearch: "",
         presetId,
+        protocolsManuallyEdited: false,
         providerPlugins: [],
         selectedModels: [],
         selectedProtocols: []
@@ -2190,6 +2193,7 @@ export function AddProviderForm({
       modelsText: draft.modelsText.trim() || preset?.defaultModels?.join("\n") || "",
       name: mode === "add" && preset && generatedName ? uniqueProviderName(providers, t(preset.name)) : draft.name,
       presetId,
+      protocolsManuallyEdited: false,
       providerPlugins: [],
       protocol: endpoint?.protocols[0] ?? draft.protocol,
       selectedModels: [],
@@ -2468,6 +2472,7 @@ export function AddProviderForm({
                                     checked={checked}
                                     onCheckedChange={() => {
                                       onChange({
+                                        protocolsManuallyEdited: true,
                                         selectedProtocols: checked
                                           ? draft.selectedProtocols.filter((selected) => selected !== protocol)
                                           : uniqueProviderProtocols([...draft.selectedProtocols, protocol])
@@ -2501,6 +2506,7 @@ export function AddProviderForm({
                                         return;
                                       }
                                       onChange({
+                                        protocolsManuallyEdited: true,
                                         selectedProtocols: checked
                                           ? draft.selectedProtocols.filter((protocol) => protocol !== selectableProtocol)
                                           : uniqueProviderProtocols([...draft.selectedProtocols, selectableProtocol])

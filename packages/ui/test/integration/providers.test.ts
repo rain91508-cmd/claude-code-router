@@ -1269,6 +1269,56 @@ test("Kimi Global preset keeps OpenAI Chat when probe detects anthropic fallback
   assert.equal(payload.baseUrl, "https://api.moonshot.ai/v1");
 });
 
+test("manual protocol deselection survives probe when manually edited", () => {
+  setProviderPresets([moonshotGlobalProviderPreset]);
+  const draft = {
+    ...createProviderDraft([]),
+    baseUrl: "https://api.moonshot.ai/v1",
+    presetId: "moonshot-global",
+    protocol: "openai_chat_completions",
+    protocolsManuallyEdited: true,
+    selectedProtocols: ["openai_chat_completions"]
+  };
+  const probe = {
+    capabilities: [
+      {
+        baseUrl: "https://api.moonshot.ai/anthropic",
+        endpoint: "https://api.moonshot.ai/anthropic/v1/messages",
+        source: "detected" as const,
+        type: "anthropic_messages" as const
+      },
+      {
+        baseUrl: "https://api.moonshot.ai/v1",
+        source: "preset" as const,
+        type: "openai_chat_completions" as const
+      }
+    ],
+    detectedProtocol: "anthropic_messages" as const,
+    models: [],
+    normalizedBaseUrl: "https://api.moonshot.ai/anthropic",
+    protocols: [
+      {
+        endpoint: "https://api.moonshot.ai/anthropic/v1/messages",
+        message: "HTTP 400: model is required",
+        protocol: "anthropic_messages" as const,
+        status: 400,
+        supported: true
+      },
+      {
+        endpoint: "https://api.moonshot.ai/v1",
+        message: "",
+        protocol: "openai_chat_completions" as const,
+        status: 200,
+        supported: true
+      }
+    ]
+  };
+
+  const next = applyProviderProbeResult(draft, probe);
+
+  assert.deepEqual(next.selectedProtocols, ["openai_chat_completions"]);
+});
+
 test("Kimi Global deep link explicit OpenAI protocol wins over anthropic probe", () => {
   const probe = {
     capabilities: [

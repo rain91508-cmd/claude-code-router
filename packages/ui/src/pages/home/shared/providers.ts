@@ -657,6 +657,7 @@ export function createProviderDraftFromDeepLinkPayload(
     name: uniqueProviderName(providers, baseName),
     presetId: preset?.id ?? customProviderPresetId,
     protocolDetectionMode: "auto",
+    protocolsManuallyEdited: false,
     providerPlugins: [],
     protocol,
     selectedModels: [],
@@ -752,6 +753,7 @@ export function createProviderDraft(providers: GatewayProviderConfig[]): AddProv
     name: uniqueProviderName(providers),
     presetId: "",
     protocolDetectionMode: "auto",
+    protocolsManuallyEdited: false,
     providerPlugins: [],
     protocol: "openai_chat_completions",
     selectedModels: [],
@@ -1899,14 +1901,15 @@ export function selectedProviderProtocolsForProbe(
   selectedProtocols: GatewayProviderProtocol[],
   probe: GatewayProviderProbeResult,
   _fallback: GatewayProviderProtocol,
-  presetId?: string
+  presetId?: string,
+  manuallyEdited?: boolean
 ): GatewayProviderProtocol[] {
   const selectable = providerSelectableProtocolsFromProbe(probe);
   if (selectable.length === 0) {
     return [];
   }
 
-  if (selectedProtocolsMatchPresetDefault(selectedProtocols, presetId)) {
+  if (!manuallyEdited && selectedProtocolsMatchPresetDefault(selectedProtocols, presetId)) {
     return selectable;
   }
 
@@ -2057,7 +2060,7 @@ export function providerCapabilitiesForProtocols(
 
 export function applyProviderProbeResult(draft: AddProviderDraft, probe: GatewayProviderProbeResult): AddProviderDraft {
   const detectedProtocol = probe.detectedProtocol ?? draft.protocol;
-  const selectedProtocols = selectedProviderProtocolsForProbe(draft.selectedProtocols, probe, detectedProtocol, draft.presetId);
+  const selectedProtocols = selectedProviderProtocolsForProbe(draft.selectedProtocols, probe, detectedProtocol, draft.presetId, draft.protocolsManuallyEdited);
   const protocol = selectedProtocols.includes(draft.protocol)
     ? draft.protocol
     : selectedProtocols.includes(detectedProtocol)

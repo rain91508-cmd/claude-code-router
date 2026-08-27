@@ -3,6 +3,10 @@ import test from "node:test";
 import { buildClaudeAppGatewayModelRoutes } from "@ccr/core/agents/claude-app/gateway-routes.ts";
 import { prepareClaudeAppDiscoveredModelRequest } from "@ccr/core/gateway/features/model-discovery.ts";
 import { fetchUpstreamWithFallback, prepareGatewayUpstreamAttemptForTest } from "@ccr/core/gateway/upstream/executor.ts";
+import {
+  providerCapabilityForClientProtocolWithModel,
+  providerProtocolForClientProtocolWithModel
+} from "@ccr/core/providers/runtime-topology.ts";
 import { RequestRouteTraceRecorder } from "@ccr/core/observability/route-trace.ts";
 
 const retryConfig = {
@@ -473,4 +477,195 @@ test("model-chain fallback rebuilds every protocol attempt from the canonical re
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("per-model protocol restriction blocks routing on a disallowed protocol", () => {
+  const config = {
+    Providers: [
+      {
+        capabilities: [
+          { baseUrl: "https://provider.example/v1", type: "openai_chat_completions" },
+          { baseUrl: "https://provider.example", type: "anthropic_messages" }
+        ],
+        credentials: [{ apiKey: "key", id: "provider-main" }],
+        id: "dual",
+        modelMetadata: {
+          "openai-only-model": { protocols: ["openai_chat_completions"] }
+        },
+        models: ["openai-only-model", "both-model"],
+        name: "Dual"
+      }
+    ],
+    Router: { fallback: { mode: "off", models: [], retryCount: 0 }, rules: [] },
+    virtualModelProfiles: []
+  };
+
+  // Requesting the Anthropic path for a model that only supports OpenAI must be
+  // translated onto the allowed (OpenAI) capability, never the Anthropic one.
+  const blocked = prepareGatewayUpstreamAttemptForTest({
+    body: { messages: [], model: "openai-only-model" },
+    config,
+    headers: {},
+    method: "POST",
+    path: "/v1/messages",
+    routedModel: "openai-only-model"
+  });
+  assert.equal(blocked.routedModel, "dual::openai_chat_completions/openai-only-model");
+  assert.ok(!String(blocked.routedModel).includes("anthropic_messages"));
+
+  // Requesting the OpenAI path for the restricted model keeps the openai capability selector.
+  const allowed = prepareGatewayUpstreamAttemptForTest({
+    body: { messages: [], model: "openai-only-model" },
+    config,
+    headers: {},
+    method: "POST",
+    path: "/v1/chat/completions",
+    routedModel: "openai-only-model"
+  });
+  assert.equal(allowed.routedModel, "dual::openai_chat_completions/openai-only-model");
+
+  // A model without restriction can use either protocol.
+  const anthropic = prepareGatewayUpstreamAttemptForTest({
+    body: { messages: [], model: "both-model" },
+    config,
+    headers: {},
+    method: "POST",
+    path: "/v1/messages",
+    routedModel: "both-model"
+  });
+  assert.equal(anthropic.routedModel, "dual::anthropic_messages/both-model");
+});
+
+test("providerProtocolForClientProtocolWithModel honors per-model restriction", () => {
+  const provider = {
+    capabilities: [
+      { baseUrl: "https://provider.example/v1", type: "openai_chat_completions" },
+      { baseUrl: "https://provider.example", type: "anthropic_messages" }
+    ],
+    id: "dual",
+    modelMetadata: { "openai-only": { protocols: ["openai_chat_completions"] } },
+    models: ["openai-only", "both"],
+    name: "Dual"
+  };
+
+  // Restricted model: anthropic request falls back to the allowed protocol (openai).
+  assert.equal(
+    providerProtocolForClientProtocolWithModel(provider, "anthropic_messages", "openai-only"),
+    "openai_chat_completions"
+  );
+  // Case-insensitive metadata key lookup.
+  const caseInsensitiveProvider = {
+    ...provider,
+    modelMetadata: { "OpenAI-Only": { protocols: ["openai_chat_completions"] } },
+    models: ["OpenAI-Only"]
+  };
+  assert.equal(
+    providerProtocolForClientProtocolWithModel(caseInsensitiveProvider, "anthropic_messages", "openai-only"),
+    "openai_chat_completions"
+  );
+  // Restricted model: openai request returns openai.
+  assert.equal(
+    providerProtocolForClientProtocolWithModel(provider, "openai_chat_completions", "openai-only"),
+    "openai_chat_completions"
+  );
+  // Unrestricted model: both protocols allowed.
+  assert.equal(
+    providerProtocolForClientProtocolWithModel(provider, "anthropic_messages", "both"),
+    "anthropic_messages"
+  );
+  // Unknown model falls back to provider-wide resolution.
+  assert.equal(
+    providerProtocolForClientProtocolWithModel(provider, "anthropic_messages", undefined),
+    "anthropic_messages"
+  );
+});
+
+test("providerCapabilityForClientProtocolWithModel honors per-model restriction", () => {
+  const provider = {
+    capabilities: [
+      { baseUrl: "https://provider.example/v1", type: "openai_chat_completions" },
+      { baseUrl: "https://provider.example", type: "anthropic_messages" }
+    ],
+    id: "dual",
+    modelMetadata: { "openai-only": { protocols: ["openai_chat_completions"] } },
+    models: ["openai-only"],
+    name: "Dual"
+  };
+
+  assert.equal(
+    providerCapabilityForClientProtocolWithModel(provider, "anthropic_messages", "openai-only")?.type,
+    "openai_chat_completions"
+  );
+  assert.equal(
+    providerCapabilityForClientProtocolWithModel(provider, "openai_chat_completions", "openai-only")?.type,
+    "openai_chat_completions"
+  );
+});
+
+test("runtime routing honors per-model protocol restriction (real gateway path)", async () => {
+  const config = {
+    Providers: [
+      {
+        capabilities: [
+          { baseUrl: "https://provider.example/v1", type: "openai_chat_completions" },
+          { baseUrl: "https://provider.example", type: "anthropic_messages" }
+        ],
+        credentials: [{ apiKey: "key", id: "dual-main" }],
+        id: "dual",
+        modelMetadata: { "OpenAI-Only-Model": { protocols: ["openai_chat_completions"] } },
+        models: ["OpenAI-Only-Model", "both-model"],
+        name: "Dual"
+      }
+    ],
+    Router: { fallback: { mode: "off", models: [], retryCount: 0 }, rules: [] },
+    virtualModelProfiles: []
+  };
+  const runRequest = async (path) => {
+    const captured = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (_url, init) => {
+      captured.push(init.headers);
+      return new Response('{"ok":true}', { status: 200 });
+    };
+    try {
+      const trace = new RequestRouteTraceRecorder(Date.now());
+      await fetchUpstreamWithFallback({
+        body: Buffer.from(JSON.stringify({ messages: [], model: "openai-only-model" })),
+        config,
+        coreAuthToken: "core-token",
+        fallback: config.Router.fallback,
+        headers: {},
+        method: "POST",
+        path,
+        routedModel: "openai-only-model",
+        trace,
+        upstreamUrl: "http://127.0.0.1:3456" + path
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    return captured;
+  };
+
+  // Allowed protocol (OpenAI path): request must be routed onto openai_chat_completions.
+  const openaiCaptured = await runRequest("/v1/chat/completions");
+  assert.equal(openaiCaptured.length, 1);
+  assert.ok(
+    String(openaiCaptured[0]["x-target-providers"] ?? openaiCaptured[0]["x-target-provider"]).includes("openai_chat_completions"),
+    "openai-restricted model must be served over openai_chat_completions"
+  );
+
+  // Disallowed client protocol (Anthropic path): the gateway translates the
+  // request onto the model's allowed protocol (openai_chat_completions) instead
+  // of serving the disallowed anthropic protocol.
+  const anthropicCaptured = await runRequest("/v1/messages");
+  assert.equal(anthropicCaptured.length, 1);
+  assert.ok(
+    String(anthropicCaptured[0]["x-target-providers"] ?? anthropicCaptured[0]["x-target-provider"] ?? "").includes("openai_chat_completions"),
+    "openai-restricted model must be translated onto openai_chat_completions, not anthropic_messages"
+  );
+  assert.ok(
+    !String(anthropicCaptured[0]["x-target-providers"] ?? anthropicCaptured[0]["x-target-provider"] ?? "").includes("anthropic_messages"),
+    "openai-restricted model must not be routed over anthropic_messages"
+  );
 });

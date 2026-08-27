@@ -240,6 +240,12 @@ export type ProviderModelMetadata = {
   supportsFastMode?: boolean;
   supportedReasoningLevels?: ProviderReasoningLevel[];
   supportsReasoningSummaries?: boolean;
+  /**
+   * Protocols this model was verified to support (per-model connectivity
+   * check). When set, the provider should only route this model over one of
+   * these protocols even if the provider itself advertises more.
+   */
+  protocols?: GatewayProviderCapabilityProtocol[];
 };
 
 export type ProviderCredentialConfig = {
@@ -651,6 +657,7 @@ export type GatewayProviderConnectivityCheckRequest = {
 
 export type GatewayProviderConnectivityCheckReport = {
   failed: GatewayProviderConnectivityCheckModelResult[];
+  modelMetadata?: Record<string, ProviderModelMetadata>;
   passed: GatewayProviderConnectivityCheckModelResult[];
   probe?: GatewayProviderProbeResult;
   results: GatewayProviderConnectivityCheckModelResult[];

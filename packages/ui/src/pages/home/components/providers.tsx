@@ -13,15 +13,15 @@ import {
   ProviderAccountTestResult, providerBaseUrl, providerCapabilitiesSummary, ProviderCredentialDraft, ProviderDeepLinkPayload, ProviderDeepLinkRequest, providerDraftSafetyIssue, providerCredentialDraftPatchFromJson, providerHttpJsonConnectorFromDraft,
   providerBrowserConnectorFromDraft, providerBrowserCredentialsOptions,
   ProviderConnectivityCheckReport, providerCapabilityBaseUrlForProtocol, providerConnectivityApiKeyFromDraft, providerDeepLinkDisplayIcon, providerDraftHasReadyCredentialPool, providerListItemKey, providerMatchesQuery, ProviderPreset, providerPresetIconUrls, providerProbeHasSupportedProtocol,
-  providerDisplayIcon, providerGlobalBaseUrlForProbe, providerModelDisplayName, providerModelDisplayTitle, providerProtocolOptions, providerSelectableProtocolsFromProbe, providerUsageFieldPatch, ProviderUsageFieldTarget, providerUsageMethodOptions, Search, SelectControl,
+  providerDisplayIcon, providerGlobalBaseUrlForProbe, providerModelDisplayName, providerModelDisplayTitle, providerProtocolOptions, providerSelectableProtocolsFromProbe, providerUsageFieldPatch, ProviderUsageFieldTarget, providerUsageMethodOptions, Search, SelectControl, selectedProtocolsForModels,
   RefreshCw, resolveProviderDeepLinkPreset, ShieldCheck, splitLines, Switch, Tabs, TabsList, TabsTrigger, Textarea, Toggle, translatedProviderProtocolLabel, translateOptions,
-  translateProbeProtocolMessage, Trash2, uniqueProviderName, uniqueProviderProtocols, useAppErrorText, useAppText, useEffect, useLayoutEffect, useMemo,
+  translateProbeProtocolMessage, Trash2, uniqueProviderName, uniqueProviderProtocols, useAppErrorText, useAppText, useEffect, useLayoutEffect, useMemo, intersectModelProtocolsWithProvider,
   useRef, useState, X, isGatewayProviderEnabled, isPlainRecord
 } from "../shared/index";
 import { PopoverPortal } from "@/components/ui/popover";
 import { Tooltip, TooltipPortal } from "@/components/ui/tooltip";
 import { providerUrlWithDefaultScheme } from "@ccr/core/providers/url";
-import type { ChromeLoginImportJob, LocalAgentProviderCandidate, OpenRouterProviderCatalogItem, OpenRouterProviderCatalogRequest, ProviderAccountHttpJsonConnectorConfig, ProviderAccountWebContentJsonConnectorConfig } from "@ccr/core/contracts/app";
+import type { ChromeLoginImportJob, GatewayProviderCapabilityProtocol, LocalAgentProviderCandidate, OpenRouterProviderCatalogItem, OpenRouterProviderCatalogRequest, ProviderAccountHttpJsonConnectorConfig, ProviderAccountWebContentJsonConnectorConfig } from "@ccr/core/contracts/app";
 import type { ReactNode } from "react";
 
 const useClientLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
@@ -2035,10 +2035,21 @@ export function AddProviderForm({
   const showStep = (step: ProviderSetupStepId) => !activeStep || activeStep === step;
 
   function updateConfiguredModels(models: string[]) {
-    onChange({
-      modelsText: models.filter((model) => !catalogModelIds.has(model)).join("\n"),
-      selectedModels: models.filter((model) => catalogModelIds.has(model))
-    });
+    const selectedModels = models.filter((model) => catalogModelIds.has(model));
+    const typedModels = models.filter((model) => !catalogModelIds.has(model));
+    const patch: Partial<AddProviderDraft> = {
+      modelsText: typedModels.join("\n"),
+      selectedModels
+    };
+    // When per-model protocol info is known (from a connectivity check),
+    // restrict the provider protocols to the union of what the selected
+    // models actually support, so an OpenAI-only model is not routed over
+    // Anthropic.
+    const restricted = selectedProtocolsForModels(draft.modelMetadata, models);
+    if (restricted && !draft.protocolsManuallyEdited) {
+      patch.selectedProtocols = restricted;
+    }
+    onChange(patch);
   }
 
   function updateAutoProtocolDetection(enabled: boolean) {
@@ -2359,6 +2370,7 @@ export function AddProviderForm({
                 onRefresh={onRefreshModels}
                 onSelectedChange={updateConfiguredModels}
                 openRouterDiscountRouting={draft.presetId === "openrouter"}
+                protocols={draft.selectedProtocols}
                 openRouterProviderCatalogRequest={draft.presetId === "openrouter"
                   ? {
                     apiKey: providerConnectivityApiKeyFromDraft(draft),
@@ -2471,11 +2483,13 @@ export function AddProviderForm({
                                     aria-label={`${t("Add")} ${translatedProviderProtocolLabel(protocol, t)}`}
                                     checked={checked}
                                     onCheckedChange={() => {
+                                      const nextProtocols = checked
+                                        ? draft.selectedProtocols.filter((selected) => selected !== protocol)
+                                        : uniqueProviderProtocols([...draft.selectedProtocols, protocol]);
                                       onChange({
+                                        modelMetadata: intersectModelProtocolsWithProvider(draft.modelMetadata, nextProtocols),
                                         protocolsManuallyEdited: true,
-                                        selectedProtocols: checked
-                                          ? draft.selectedProtocols.filter((selected) => selected !== protocol)
-                                          : uniqueProviderProtocols([...draft.selectedProtocols, protocol])
+                                        selectedProtocols: nextProtocols
                                       });
                                     }}
                                   />
@@ -2505,11 +2519,13 @@ export function AddProviderForm({
                                       if (!selectableProtocol) {
                                         return;
                                       }
+                                      const nextProtocols = checked
+                                        ? draft.selectedProtocols.filter((protocol) => protocol !== selectableProtocol)
+                                        : uniqueProviderProtocols([...draft.selectedProtocols, selectableProtocol]);
                                       onChange({
+                                        modelMetadata: intersectModelProtocolsWithProvider(draft.modelMetadata, nextProtocols),
                                         protocolsManuallyEdited: true,
-                                        selectedProtocols: checked
-                                          ? draft.selectedProtocols.filter((protocol) => protocol !== selectableProtocol)
-                                          : uniqueProviderProtocols([...draft.selectedProtocols, selectableProtocol])
+                                        selectedProtocols: nextProtocols
                                       });
                                     }}
                                   />
@@ -3882,6 +3898,7 @@ function ProviderModelPicker({
   onSelectedChange,
   openRouterDiscountRouting = false,
   openRouterProviderCatalogRequest,
+  protocols,
   query,
   selected
 }: {
@@ -3896,6 +3913,7 @@ function ProviderModelPicker({
   onSelectedChange: (value: string[]) => void;
   openRouterDiscountRouting?: boolean;
   openRouterProviderCatalogRequest?: OpenRouterProviderCatalogRequest;
+  protocols?: GatewayProviderCapabilityProtocol[];
   query: string;
   selected: string[];
 }) {
@@ -4234,6 +4252,7 @@ function ProviderModelPicker({
             onRemoveModel={removeModel}
             openRouterDiscountRouting={openRouterDiscountRouting}
             openRouterProviderCatalogRequest={openRouterProviderCatalogRequest}
+            protocols={protocols}
             sourceModels={catalog}
           />
         </div>
@@ -4649,6 +4668,7 @@ function ModelMetadataEditor({
   onRemoveModel,
   openRouterDiscountRouting = false,
   openRouterProviderCatalogRequest,
+  protocols,
   sourceModels
 }: {
   className?: string;
@@ -4662,6 +4682,7 @@ function ModelMetadataEditor({
   onRemoveModel?: (model: string) => void;
   openRouterDiscountRouting?: boolean;
   openRouterProviderCatalogRequest?: OpenRouterProviderCatalogRequest;
+  protocols?: GatewayProviderCapabilityProtocol[];
   sourceModels?: string[];
 }) {
   const t = useAppText();
@@ -4806,6 +4827,23 @@ function ModelMetadataEditor({
     });
   }
 
+  function updateModelProtocols(model: string, nextProtocols: GatewayProviderCapabilityProtocol[]) {
+    updateMetadata(model, (current) => {
+      const next = { ...current };
+      if (nextProtocols.length > 0) next.protocols = [...nextProtocols];
+      else delete next.protocols;
+      return next;
+    });
+  }
+
+  function resetModelProtocols(model: string) {
+    updateMetadata(model, (current) => {
+      const next = { ...current };
+      delete next.protocols;
+      return next;
+    });
+  }
+
   function updateOpenRouterDiscountRouting(model: string, checked: boolean) {
     updateMetadata(model, (current) => {
       const next = { ...current };
@@ -4880,7 +4918,8 @@ function ModelMetadataEditor({
             modelMetadata?.openRouterDiscountRouting ||
             modelMetadata?.supportsFastMode !== undefined ||
             modelMetadata?.supportedReasoningLevels !== undefined ||
-            modelMetadata?.supportsReasoningSummaries !== undefined
+            modelMetadata?.supportsReasoningSummaries !== undefined ||
+            modelMetadata?.protocols !== undefined
           );
           const configuredReasoningLevels = new Set(
             (modelMetadata?.supportedReasoningLevels ?? modelDefaults?.supportedReasoningLevels ?? [])
@@ -5053,6 +5092,42 @@ function ModelMetadataEditor({
                     </div>
                     <div className="text-[10px] leading-4 text-muted-foreground/75">{t("Declare whether the model accepts image input.")}</div>
                   </div>
+                  {protocols && protocols.length > 0 ? (
+                    <div className="space-y-2">
+                      <div className="flex min-w-0 items-center justify-between gap-2">
+                        <Label className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{t("Protocols")}</Label>
+                        {modelMetadata?.protocols ? (
+                          <Button className="h-6 px-2 text-[10px]" onClick={() => resetModelProtocols(model)} type="button" variant="ghost">
+                            {t("Use provider defaults")}
+                          </Button>
+                        ) : null}
+                      </div>
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-2 sm:grid-cols-3">
+                        {providerProtocolOptions
+                          .filter((option) => protocols.includes(option.value))
+                          .map((option) => {
+                            const selectedProtocols = modelMetadata?.protocols ?? protocols;
+                            const checked = selectedProtocols.includes(option.value);
+                            return (
+                              <Label className="flex min-w-0 items-center gap-2 text-[11px] font-normal" key={option.value}>
+                                <Checkbox
+                                  checked={checked}
+                                  onCheckedChange={(nextChecked) => {
+                                    const current = modelMetadata?.protocols ?? protocols;
+                                    const nextProtocols = nextChecked
+                                      ? uniqueProviderProtocols([...current, option.value])
+                                      : current.filter((value) => value !== option.value);
+                                    updateModelProtocols(model, nextProtocols);
+                                  }}
+                                />
+                                <span className="truncate">{t(option.label)}</span>
+                              </Label>
+                            );
+                          })}
+                      </div>
+                      <div className="text-[10px] leading-4 text-muted-foreground/75">{t("Restrict which provider protocols this model is served over. Defaults to every protocol the provider supports.")}</div>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
             </div>

@@ -11,7 +11,7 @@ import { isRecord, stringListValue, stringValue } from "@ccr/core/gateway/intern
 import { fusionBuiltinToolArtifacts, fusionToolFallbackMcpServer, normalizeFusionWebSearchProfileToolName, toolHubMcpServer, withCodexCompatibleVirtualModelProfiles, withFusionVirtualModelAliases, withFusionVisionToolInstructions, withFusionWebSearchToolInstructions } from "@ccr/core/mcp/fusion-config";
 import { mediaToolsMcpServer } from "@ccr/core/mcp/grok-media-config";
 import { resolveGatewayPublicModelId } from "@ccr/core/gateway/features/model-discovery";
-import { activeProviderCredentials, inferProtocol, normalizedProviderCapabilities, normalizeProviderProtocol, providerCapabilityForClientProtocol, providerCapabilityInternalName, providerCapabilityNameMatches, providerCredentialInternalName, providerProtocolForClientProtocol, sortProviderCredentialsForConfig, toCoreGatewayProviders } from "@ccr/core/providers/runtime-topology";
+import { activeProviderCredentials, inferProtocol, normalizedProviderCapabilities, normalizeProviderProtocol, providerCapabilityForClientProtocolWithModel, providerCapabilityInternalName, providerCapabilityNameMatches, providerCredentialInternalName, providerProtocolForClientProtocolWithModel, sortProviderCredentialsForConfig, toCoreGatewayProviders } from "@ccr/core/providers/runtime-topology";
 import { buildRawTraceConfig } from "@ccr/core/observability/raw-trace-sync";
 import { endpoint, resolveLocalAgentAuthProviderHookEntry, resolveUndiciProxyAgentModule, resolveUpstreamHeaderSanitizerEntry, writeGatewayProxyPreloadFile } from "@ccr/core/gateway/core-runtime/supervisor";
 import { billingUsageSyncHeader, billingUsageSyncPath, claudeCodeOauthBetaHeader, claudeCodeOauthRequiredBeta, coreGatewayAuthHeader, coreGatewayAuthTokenEnv } from "@ccr/core/gateway/internal/shared";
@@ -443,18 +443,19 @@ function rewriteModelSelectorForCoreGatewayProfile(
     return publicModel;
   }
 
-  const providerName = coreGatewayProviderSelectorName(selector.provider, clientProtocol);
+  const providerName = coreGatewayProviderSelectorName(selector.provider, clientProtocol, selector.model);
   return providerName ? `${providerName}/${selector.model}` : publicModel;
 }
 
 
 function coreGatewayProviderSelectorName(
   provider: GatewayProviderConfig,
-  clientProtocol: GatewayProviderProtocol
+  clientProtocol: GatewayProviderProtocol,
+  model?: string
 ): string | undefined {
-  const capability = providerCapabilityForClientProtocol(provider, clientProtocol);
+  const capability = providerCapabilityForClientProtocolWithModel(provider, clientProtocol, model);
   const explicitCapabilities = normalizedProviderCapabilities(provider);
-  const protocol = capability?.type ?? (explicitCapabilities.length === 0 ? providerProtocolForClientProtocol(provider, clientProtocol) : undefined);
+  const protocol = capability?.type ?? (explicitCapabilities.length === 0 ? providerProtocolForClientProtocolWithModel(provider, clientProtocol, model) : undefined);
   if (!protocol) {
     return undefined;
   }

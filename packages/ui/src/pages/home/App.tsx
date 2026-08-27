@@ -16,14 +16,14 @@ import {
   isCursorProxyPluginConfig, isGatewayProviderEnabled, isMacPlatform, isPlainRecord, isProfileDraftSubmittable, isProviderNameDuplicate, isProviderProbeCandidateReady,
   isRoutingRuleDraftSubmittable,
   isTraySupportedPlatform,
-  LayoutGroup, mergeModelDisplayNames, mergeModelMetadata, mergeProviderModelLists, modelDescriptionsForModels, modelDisplayNamesForModels, modelMetadataForModels,
+  LayoutGroup, mergeModelDisplayNames, mergeModelMetadata, mergeModelMetadataWithProbe, mergeProviderModelLists, modelDescriptionsForModels, modelDisplayNamesForModels, modelMetadataForModels,
   navigation, NavigationId, normalizeApiKeys, normalizeBotGatewaySavedConfigs, normalizeConfig, normalizeLanguagePreference, normalizeObservabilityConfig, normalizeOverviewWidgets, normalizeProxyConfig,
   normalizeProfileItem, normalizeProviderBaseUrl, normalizeRouterFallbackConfig, normalizeThemePreference, normalizeToolHubConfig, normalizeTrayBalanceProgressConfig, normalizeTrayIconPreference,
   normalizeTrayWidgets, normalizeTrayWindowModules, normalizeVirtualModelDraftPatch, OnboardingReadinessOptions, OnboardingStepId, onboardingStepOrder,
   OverviewWidgetConfig, parseProviderAccountDraft, pluginConfigPatchFromSettingsDraft,
   providerCredentialsFromDraft,
   persistLanguagePreference, PluginInstallCandidate, PluginMarketplaceEntry, PluginRoutingConfigTarget, PluginSettingsDraft, presetCapabilitiesFromDraft,
-  probeProviderCandidates, probeProviderDeepLinkPayload, profileAgentLabel, profileAgentOptionsForRuntime, profileDraftWithDetectedAppPath, profileEnvRowsForAgent, ProfileConfig, ProfileOpenSurface, ProfileRuntimeStatus, profileConfigFromDraft, providerAccountApiKeySafetyIssue,
+  probeProviderCandidates, probeProviderDeepLinkPayload, profileAgentLabel, profileAgentOptionsForRuntime, profileDraftWithDetectedAppPath, profileEnvRowsForAgent, ProfileConfig, ProfileOpenSurface, ProfileRuntimeStatus, profileConfigFromDraft, providerAccountApiKeySafetyIssue, intersectModelProtocolsWithProvider,
   profileOpenCommandFallback, profileOpenSurfaces, ProviderAccountSnapshot, providerApiKeySafetyIssue, ProviderConnectivityCheckReport, ProviderDeepLinkPayload, ProviderDeepLinkRequest, providerIdentitySafetyIssue, providerProbeCandidates,
   providerAutoFetchKnownModelsForSave, providerBaseUrl, providerCapabilitiesForProtocols, providerCapabilitiesForSave, providerConnectivityApiKeyFromDraft, providerConnectivityProviderPlugins, providerGlobalBaseUrlForProbe, providerProbeCandidatesApiKeySafetyIssue, providerProbeHasSupportedProtocol, providerProbeInputKey, providerProtocolOptions, providerSelectableProtocolsFromProbe, ProxyNetworkSnapshot,
   ProxyStatus, readLanguagePreference, RequestLogListFilter, RequestLogPage, ResolvedLanguage,
@@ -1571,6 +1571,13 @@ function App() {
 
       setProviderConnectivityProbe(report.probe);
 
+      if (report.modelMetadata) {
+        setProviderDraft((current) => ({
+          ...current,
+          modelMetadata: mergeModelMetadataWithProbe(current.modelMetadata, report.modelMetadata, current.selectedProtocols)
+        }));
+      }
+
       if (report.passed.length === 0) {
         setProviderProbeError(translateAppErrorMessage(copy, report.failed[0]?.message || "Request failed."));
       }
@@ -1641,7 +1648,8 @@ function App() {
     const fallbackBaseUrl = providerGlobalBaseUrlForProbe(providerDraft.baseUrl, saveProbe, protocolsToSave);
     const modelDescriptions = modelDescriptionsForModels(providerDraft.modelDescriptions, models);
     const modelDisplayNames = modelDisplayNamesForModels(providerDraft.modelDisplayNames, models);
-    const modelMetadata = modelMetadataForModels(providerDraft.modelMetadata, models);
+    const rawModelMetadata = modelMetadataForModels(providerDraft.modelMetadata, models);
+    const modelMetadata = rawModelMetadata ? intersectModelProtocolsWithProvider(rawModelMetadata, protocolsToSave) ?? rawModelMetadata : undefined;
     const existingProvider = providerEditIndex !== undefined ? draftConfig.Providers[providerEditIndex] : undefined;
     const capabilities = providerCapabilitiesForSave(
       providerCapabilitiesForProtocols(providerDraft.baseUrl, protocolsToSave, saveProbe, presetCapabilitiesFromDraft(providerDraft)),

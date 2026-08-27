@@ -36,6 +36,7 @@ import {
   providerProbeCandidates,
   providerSelectableProtocolsFromProbe,
   removeLocalAgentProviderPluginsForProvider,
+  selectedProtocolsForModels,
   setProviderPresets
 } from "@ccr/ui/pages/home/shared/index.tsx";
 import { installBrowserGlobals } from "../fixtures/index.ts";
@@ -172,6 +173,33 @@ test("provider save drops a deselected protocol from preserved capabilities (edi
     providerCapabilitiesForSave(current, preserved, "https://api.example/v1", "https://api.example/v1"),
     current
   );
+});
+
+test("selectedProtocolsForModels restricts to union of per-model protocols", () => {
+  const modelMetadata = {
+    "openai-only-model": {
+      protocols: ["openai_chat_completions" as const]
+    },
+    "anthropic-only-model": {
+      protocols: ["anthropic_messages" as const]
+    },
+    "unknown-model": {}
+  };
+
+  // Selecting only the OpenAI-only model keeps openai_chat_completions.
+  assert.deepEqual(
+    selectedProtocolsForModels(modelMetadata, ["openai-only-model"]),
+    ["openai_chat_completions"]
+  );
+
+  // Selecting both restricts to the union of both protocols.
+  assert.deepEqual(
+    selectedProtocolsForModels(modelMetadata, ["openai-only-model", "anthropic-only-model"]),
+    ["openai_chat_completions", "anthropic_messages"]
+  );
+
+  // No per-model protocol info -> undefined, leave selection untouched.
+  assert.equal(selectedProtocolsForModels(modelMetadata, ["unknown-model"]), undefined);
 });
 
 test("provider probe result drops unavailable selected protocols", () => {

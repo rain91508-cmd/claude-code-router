@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type {
+  GatewayProviderConnectivityCheckModelResult,
   GatewayProviderConnectivityCheckReport,
   GatewayProviderConnectivityCheckRequest,
   GatewayProviderCapability,
@@ -10,7 +11,8 @@ import type {
   GatewayProviderProbeRequest,
   GatewayProviderProbeResult,
   GatewayProviderCapabilityProtocol,
-  GatewayProviderProtocol
+  GatewayProviderProtocol,
+  ProviderModelMetadata
 } from "@ccr/core/contracts/app";
 import { codexDefaultBaseUrl, readCodexAuth } from "@ccr/core/agents/local-providers/codex";
 import { localAgentProviderApiKey } from "@ccr/core/agents/local-providers/shared";
@@ -250,12 +252,29 @@ export async function checkGatewayProviderConnectivity(
     recordProviderConnectivityRequestLog(request, check, options.requestLog);
   }
   const reports = checks.map((check) => check.report);
+  const modelMetadata = providerConnectivityModelMetadata(reports);
   return {
     failed: reports.filter((item) => !item.supported),
+    modelMetadata,
     passed: reports.filter((item) => item.supported),
     probe: checks.find((check) => check.report.supported && check.probe)?.probe,
     results: reports
   };
+}
+
+function providerConnectivityModelMetadata(
+  reports: GatewayProviderConnectivityCheckModelResult[]
+): Record<string, ProviderModelMetadata> | undefined {
+  const metadata: Record<string, ProviderModelMetadata> = {};
+  for (const report of reports) {
+    const protocols = uniqueProtocols(
+      report.protocols.filter((item) => item.supported).map((item) => item.protocol)
+    );
+    if (protocols.length > 0) {
+      metadata[report.model] = { ...(metadata[report.model] ?? {}), protocols };
+    }
+  }
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
 }
 
 function recordProviderConnectivityRequestLog(

@@ -1,4 +1,5 @@
 import type {
+  GatewayProviderCapabilityProtocol,
   GatewayProviderProtocol,
   ProviderAccountConfig,
   ProviderAccountConnectorConfig,
@@ -674,6 +675,10 @@ function normalizeDeepLinkModelMetadata(value: unknown): ProviderModelMetadata |
     ...(supportedReasoningLevels ? { supportedReasoningLevels } : {}),
     ...(typeof supportsReasoningSummariesValue === "boolean" ? { supportsReasoningSummaries: supportsReasoningSummariesValue } : {})
   };
+  const protocols = normalizeDeepLinkModelProtocols(value.protocols ?? value.protocol);
+  if (protocols) {
+    metadata.protocols = protocols;
+  }
   return Object.keys(metadata).length > 0 ? metadata : undefined;
 }
 
@@ -749,6 +754,31 @@ function normalizeDeepLinkReasoningLevels(value: unknown): ProviderModelMetadata
     return [{ description: normalizedString(item.description) ?? effort, effort }];
   });
   return levels.length > 0 ? levels : value.length === 0 ? [] : undefined;
+}
+
+function normalizeDeepLinkModelProtocols(value: unknown): GatewayProviderCapabilityProtocol[] | undefined {
+  const isArray = Array.isArray(value);
+  const list = isArray ? value : typeof value === "string" && value ? [value] : undefined;
+  if (!list) {
+    return undefined;
+  }
+  const valid = new Set<string>([
+    "openai_responses",
+    "openai_chat_completions",
+    "openai_image_generations",
+    "openai_video_generations",
+    "anthropic_messages",
+    "gemini_generate_content",
+    "gemini_interactions",
+    "xai_video_generations"
+  ]);
+  const protocols = list
+    .map((item) => (typeof item === "string" ? item.trim() : ""))
+    .filter((item) => item && valid.has(item)) as GatewayProviderCapabilityProtocol[];
+  if (protocols.length > 0) {
+    return [...new Set(protocols)];
+  }
+  return isArray ? [] : undefined;
 }
 
 function normalizedString(value: unknown): string | undefined {

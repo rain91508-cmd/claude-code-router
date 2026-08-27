@@ -16,7 +16,7 @@ import { isLocalClaudeCodeOauthProviderPlugin, mergeAnthropicBetaValues } from "
 import { abortSignalMessage, formatError, omitLocalObservabilityHeaders, shouldSendBody, withCoreGatewayAuthHeader } from "@ccr/core/gateway/http/io";
 import { parseJsonObjectSafe, releaseJsonObject, serializeJsonBody, serializeJsonBodyWithModel } from "@ccr/core/gateway/http/body";
 import { resolveGatewayPublicModelId } from "@ccr/core/gateway/features/model-discovery";
-import { activeProviderCredentials, findProviderByPublicOrInternalName, findProviderCredentialBySlug, normalizedProviderCapabilities, parseProviderCredentialInternalName, providerCapabilityForClientProtocol, providerCapabilityInternalName, providerCapabilityNameMatches, providerCredentialInternalName, providerCredentialPriority, providerCredentialRuntimeId, providerCredentialSlug, providerProtocolForClientProtocol, sanitizeHeaderValue } from "@ccr/core/providers/runtime-topology";
+import { activeProviderCredentials, findProviderByPublicOrInternalName, findProviderCredentialBySlug, normalizedProviderCapabilities, parseProviderCredentialInternalName, providerCapabilityForClientProtocol, providerCapabilityInternalName, providerCapabilityNameMatches, providerCredentialInternalName, providerCredentialPriority, providerCredentialRuntimeId, providerCredentialSlug, providerCapabilityForClientProtocolWithModel, providerProtocolForClientProtocolWithModel, sanitizeHeaderValue } from "@ccr/core/providers/runtime-topology";
 import { delay } from "@ccr/core/gateway/internal/clock";
 import { retryDelayAfterNetworkError, retryDelayAfterStatus, shouldFallbackAfterStatus } from "@ccr/core/gateway/upstream/retry-policy";
 import { claudeCodeOauthBetaHeader, claudeCodeOauthRequiredBeta, UpstreamRequestError } from "@ccr/core/gateway/internal/shared";
@@ -221,7 +221,7 @@ function rewriteModelSelectorForProtocol(
   const selector = resolved?.kind === "provider"
     ? { model: resolved.model, provider: resolved.provider }
     : undefined;
-  const providerName = selector ? providerSelectorNameForProtocol(selector.provider, protocol, Boolean(targetProviderName)) : undefined;
+  const providerName = selector ? providerSelectorNameForProtocol(selector.provider, protocol, Boolean(targetProviderName), selector.model) : undefined;
   return selector && providerName
     ? `${providerName}/${selector.model}`
     : publicModel;
@@ -231,13 +231,15 @@ function rewriteModelSelectorForProtocol(
 function providerSelectorNameForProtocol(
   provider: GatewayProviderConfig,
   protocol: GatewayProviderProtocol,
-  allowRuntimeProvider: boolean
+  allowRuntimeProvider: boolean,
+  model?: string
 ): string | undefined {
-  const capability = providerCapabilityForClientProtocol(provider, protocol);
+  const capability = providerCapabilityForClientProtocolWithModel(provider, protocol, model);
   if (capability) {
     return providerCapabilityInternalName(provider, capability.type);
   }
-  return allowRuntimeProvider && providerProtocolForClientProtocol(provider, protocol)
+  const fallbackProtocol = providerProtocolForClientProtocolWithModel(provider, protocol, model);
+  return allowRuntimeProvider && fallbackProtocol
     ? providerRuntimeId(provider)
     : undefined;
 }
@@ -769,7 +771,7 @@ function resolvePlannedProviderCredentialRoutingTarget(
   }
   const clientProtocol = requestProtocolForPath(path);
   const protocol = clientProtocol
-    ? providerProtocolForClientProtocol(attempt.target.provider, clientProtocol)
+    ? providerProtocolForClientProtocolWithModel(attempt.target.provider, clientProtocol, attempt.target.model) as GatewayProviderProtocol | undefined
     : undefined;
   if (!protocol) {
     return undefined;
@@ -804,7 +806,7 @@ function usageAwareOpenAiChatAttemptBody(input: {
   const modelSelector = resolveConfiguredProviderModelSelector(stringValue(parsedBody?.model), input.config);
   const providerProtocol = input.target?.protocol ?? (
     modelSelector && clientProtocol
-      ? providerProtocolForClientProtocol(modelSelector.provider, clientProtocol)
+      ? providerProtocolForClientProtocolWithModel(modelSelector.provider, clientProtocol, modelSelector.model) as GatewayProviderProtocol | undefined
       : undefined
   );
   if (providerProtocol !== "openai_chat_completions" && providerProtocol !== "openai_responses") {
@@ -886,8 +888,8 @@ function resolveProviderCredentialRoutingTarget(
   const bodyModel = stringValue(parsedBody?.model);
   const targetProviderName = firstTargetProviderHeader(headers);
   const headerProvider = targetProviderName ? findProviderByPublicOrInternalName(config, targetProviderName) : undefined;
-  const headerProviderProtocol = headerProvider ? providerProtocolForClientProtocol(headerProvider, protocol) : undefined;
   const exactHeaderProviderModel = headerProvider ? resolveExactModelForProvider(bodyModel, headerProvider) : undefined;
+  const headerProviderProtocol = headerProvider ? providerProtocolForClientProtocolWithModel(headerProvider, protocol, exactHeaderProviderModel ?? bodyModel) as GatewayProviderProtocol | undefined : undefined;
   if (headerProvider && headerProviderProtocol && exactHeaderProviderModel) {
     return {
       body: parsedBody && exactHeaderProviderModel !== bodyModel
@@ -904,7 +906,7 @@ function resolveProviderCredentialRoutingTarget(
     resolveUniqueConfiguredProviderModelSelector(bodyModel, config);
   if (modelSelector) {
     const provider = modelSelector.provider;
-    const providerProtocol = provider ? providerProtocolForClientProtocol(provider, protocol) : undefined;
+    const providerProtocol = provider ? providerProtocolForClientProtocolWithModel(provider, protocol, modelSelector.model) as GatewayProviderProtocol | undefined : undefined;
     if (provider && providerProtocol) {
       return {
         body: parsedBody ? serializeJsonBodyWithModel(parsedBody, modelSelector.model) : body,
@@ -924,11 +926,11 @@ function resolveProviderCredentialRoutingTarget(
   if (!provider) {
     return undefined;
   }
-  const providerProtocol = headerProviderProtocol ?? providerProtocolForClientProtocol(provider, protocol);
+  const providerModel = resolveModelForProvider(bodyModel, provider);
+  const providerProtocol = headerProviderProtocol ?? providerProtocolForClientProtocolWithModel(provider, protocol, providerModel ?? bodyModel) as GatewayProviderProtocol | undefined;
   if (!providerProtocol) {
     return undefined;
   }
-  const providerModel = resolveModelForProvider(bodyModel, provider);
 
   return {
     body: parsedBody && providerModel && providerModel !== bodyModel

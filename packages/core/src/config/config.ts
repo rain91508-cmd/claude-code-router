@@ -1542,7 +1542,36 @@ function parseProviderModelMetadata(value: unknown): ProviderModelMetadata | und
     ...(typeof value.supportsReasoningSummaries === "boolean" ? { supportsReasoningSummaries: value.supportsReasoningSummaries } : {}),
     ...(typeof value.supports_reasoning_summaries === "boolean" ? { supportsReasoningSummaries: value.supports_reasoning_summaries } : {})
   };
+  const protocols = parseProviderModelProtocols(value.protocols ?? value.protocol);
+  if (protocols) {
+    metadata.protocols = protocols;
+  }
   return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
+function parseProviderModelProtocols(value: unknown): GatewayProviderCapabilityProtocol[] | undefined {
+  const isArray = Array.isArray(value);
+  const list = isArray ? value : typeof value === "string" && value ? [value] : undefined;
+  if (!list) {
+    return undefined;
+  }
+  const valid = new Set<GatewayProviderCapabilityProtocol>([
+    "openai_responses",
+    "openai_chat_completions",
+    "openai_image_generations",
+    "openai_video_generations",
+    "anthropic_messages",
+    "gemini_generate_content",
+    "gemini_interactions",
+    "xai_video_generations"
+  ]);
+  const protocols = list
+    .map((item) => (typeof item === "string" ? (item.trim() as GatewayProviderCapabilityProtocol) : undefined))
+    .filter((item): item is GatewayProviderCapabilityProtocol => Boolean(item) && valid.has(item as GatewayProviderCapabilityProtocol));
+  if (protocols.length > 0) {
+    return [...new Set(protocols)];
+  }
+  return isArray ? [] : undefined;
 }
 
 function parseOpenRouterDiscountRouting(value: unknown): ProviderModelMetadata["openRouterDiscountRouting"] {

@@ -24,6 +24,107 @@ export function providerCapabilityForClientProtocol(
   return undefined;
 }
 
+/**
+ * Like {@link providerCapabilityForClientProtocol} but additionally restricts
+ * the candidate capability protocols to those the resolved model is allowed to
+ * use. A model can declare a subset of the provider's protocols via
+ * `provider.modelMetadata[model].protocols`; when present, the chosen protocol
+ * must be a member of that set. This keeps runtime routing consistent with the
+ * per-model protocol selection configured in the UI.
+ */
+export function providerCapabilityForClientProtocolWithModel(
+  provider: GatewayProviderConfig,
+  clientProtocol: GatewayProviderProtocol,
+  model?: string
+): (GatewayProviderCapability & { type: GatewayProviderProtocol }) | undefined {
+  const capabilities = normalizedProviderCapabilities(provider);
+  const allowedProtocols = modelProtocolRestriction(provider, model);
+  // Walk the client's protocol preference order and pick the first provider
+  // capability that the resolved model is actually allowed to use. This honors
+  // the per-model protocol selection: the client's preferred protocol is used
+  // when allowed, otherwise the gateway transparently translates the request to
+  // the next allowed protocol for that model instead of serving a disallowed one.
+  for (const protocol of providerProtocolPreferenceForClient(clientProtocol)) {
+    if (allowedProtocols && !allowedProtocols.has(protocol)) {
+      continue;
+    }
+    const capability = capabilities.find(
+      (item): item is GatewayProviderCapability & { type: GatewayProviderProtocol } => item.type === protocol
+    );
+    if (capability) {
+      return capability;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Returns the set of protocols a model may use on a provider, or `undefined`
+ * when the model has no per-model restriction (so all provider protocols are
+ * allowed). The allowed set is taken from
+ * `provider.modelMetadata[model].protocols`.
+ */
+export function modelProtocolRestriction(
+  provider: GatewayProviderConfig,
+  model?: string
+): Set<GatewayProviderCapabilityProtocol> | undefined {
+  if (!model) {
+    return undefined;
+  }
+  const metadata = provider.modelMetadata;
+  if (!metadata) {
+    return undefined;
+  }
+  const normalized = model.trim().toLowerCase();
+  let protocols = metadata[model]?.protocols ?? metadata[model.trim()]?.protocols;
+  if (!protocols) {
+    // Case/whitespace-insensitive fallback: the request model name may not match
+    // the stored metadata key exactly (e.g. "GPT-4o" vs "gpt-4o").
+    for (const [key, entry] of Object.entries(metadata)) {
+      if (key.trim().toLowerCase() === normalized) {
+        protocols = entry.protocols;
+        break;
+      }
+    }
+  }
+  if (!protocols) {
+    return undefined;
+  }
+  if (protocols.length === 0) {
+    return new Set();
+  }
+  return new Set(protocols);
+}
+
+/**
+ * Like {@link providerProtocolForClientProtocol} but additionally restricts the
+ * result to a protocol the resolved model is allowed to use. When the model
+ * declares `modelMetadata[model].protocols`, a protocol outside that set is
+ * never returned.
+ */
+export function providerProtocolForClientProtocolWithModel(
+  provider: GatewayProviderConfig,
+  clientProtocol: GatewayProviderProtocol,
+  model?: string
+): GatewayProviderCapabilityProtocol | undefined {
+  const capability = providerCapabilityForClientProtocolWithModel(provider, clientProtocol, model);
+  if (capability) {
+    return capability.type;
+  }
+  // No capability matched under the model restriction; keep the pre-restriction
+  // behavior for the direct-provider fallback, but never return a protocol the
+  // model is not allowed to use.
+  const protocol = providerProtocolForClientProtocol(provider, clientProtocol);
+  if (!protocol) {
+    return undefined;
+  }
+  const allowed = modelProtocolRestriction(provider, model);
+  if (allowed && !allowed.has(protocol)) {
+    return undefined;
+  }
+  return protocol;
+}
+
 export function providerProtocolForClientProtocol(
   provider: GatewayProviderConfig,
   clientProtocol: GatewayProviderProtocol

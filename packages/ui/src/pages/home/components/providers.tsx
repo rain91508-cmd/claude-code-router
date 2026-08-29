@@ -2439,6 +2439,26 @@ export function AddProviderForm({
                     </div>
                     <div className="sm:col-span-2 flex min-w-0 items-center justify-between gap-3 rounded-md border border-border bg-background px-3 py-2 text-[12px] font-semibold">
                       <span className="flex min-w-0 items-center gap-1.5">
+                        <span className="min-w-0 truncate">{t("Bypass global proxy")}</span>
+                        <Tooltip
+                          aria-label={t("When enabled, requests to this provider bypass the global upstream proxy and connect directly.")}
+                          className="h-5 w-5 items-center justify-center rounded-full text-muted-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+                          content={t("When enabled, requests to this provider bypass the global upstream proxy and connect directly.")}
+                          contentClassName="w-[260px] max-w-[calc(100vw-64px)] whitespace-normal px-2.5 py-2 text-left font-medium leading-4"
+                          side="right"
+                          tabIndex={0}
+                        >
+                          <Info className="h-3.5 w-3.5" aria-hidden="true" />
+                        </Tooltip>
+                      </span>
+                      <Switch
+                        aria-label={t("Bypass global proxy")}
+                        checked={draft.bypassProxy}
+                        onCheckedChange={(bypassProxy) => onChange({ bypassProxy })}
+                      />
+                    </div>
+                    <div className="sm:col-span-2 flex min-w-0 items-center justify-between gap-3 rounded-md border border-border bg-background px-3 py-2 text-[12px] font-semibold">
+                      <span className="flex min-w-0 items-center gap-1.5">
                         <span className="min-w-0 truncate">{t("Auto detect protocols")}</span>
                         <button
                           aria-label={t("Auto detect protocols info")}

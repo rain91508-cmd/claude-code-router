@@ -96,6 +96,7 @@ export type AddProviderDraft = {
   autoFetchModels: boolean;
   autoFetchKnownModels: string[];
   baseUrl: string;
+  bypassProxy: boolean;
   capabilities: GatewayProviderCapability[];
   catalogModelMetadata?: Record<string, ProviderModelMetadata>;
   credentialMode: "apiKey" | "pool";

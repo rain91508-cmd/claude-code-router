@@ -1,4 +1,4 @@
-import { ProxyAgent, type Dispatcher } from "undici";
+import { Agent, ProxyAgent, type Dispatcher } from "undici";
 import { loadAppConfig } from "@ccr/core/config/config";
 import {
   customUpstreamProxyFromConfig,
@@ -24,11 +24,26 @@ const proxyRefreshIntervalMs = 30 * 1000;
 const fallbackManagedEndpointUrl = "http://127.0.0.1:65535";
 
 const proxyDispatchers = new Map<string, Dispatcher>();
+let directDispatcher: Dispatcher | undefined;
 
 let systemProxyCache: SystemProxyCache | undefined;
 let systemProxyReadPromise: Promise<SystemProxyCache> | undefined;
 
-export async function fetchWithSystemProxy(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+export type FetchWithSystemProxyOptions = {
+  bypassProxy?: boolean;
+};
+
+export async function fetchWithSystemProxy(input: RequestInfo | URL, init?: RequestInit, options?: FetchWithSystemProxyOptions): Promise<Response> {
+  if (options?.bypassProxy) {
+    // Bypass the global upstream proxy even when the gateway fetch preload
+    // (gateway-proxy-preload.cjs) has patched global fetch to use ProxyAgent.
+    // That preload early-returns when init.dispatcher is present, so we must
+    // supply an explicit direct dispatcher.
+    return fetch(input, {
+      ...init,
+      dispatcher: getDirectDispatcher(init)
+    } as FetchInitWithDispatcher);
+  }
   const url = requestUrl(input);
   if (!url || !isHttpUrl(url) || shouldBypassProxy(url)) {
     return fetch(input, init);
@@ -43,6 +58,10 @@ export async function fetchWithSystemProxy(input: RequestInfo | URL, init?: Requ
     ...init,
     dispatcher: proxyDispatcher(proxyUrl)
   } as FetchInitWithDispatcher);
+}
+
+export function shouldBypassProxyForProvider(provider: { bypassProxy?: boolean } | undefined): boolean {
+  return provider?.bypassProxy === true;
 }
 
 export function readEnvProxyUrl(): string | undefined {
@@ -213,6 +232,30 @@ function proxyDispatcher(proxyUrl: string): Dispatcher {
   const dispatcher = new ProxyAgent(proxyUrl);
   proxyDispatchers.set(proxyUrl, dispatcher);
   return dispatcher;
+}
+
+function getDirectDispatcher(init?: RequestInit): Dispatcher | undefined {
+  // If caller already provided a dispatcher, respect it.
+  const existing = (init as FetchInitWithDispatcher | undefined)?.dispatcher;
+  if (existing) {
+    return existing;
+  }
+  if (directDispatcher) {
+    return directDispatcher;
+  }
+  // Mirror the timeout logic from gateway-proxy-preload.cjs so bypassed
+  // requests still respect CCR_UPSTREAM_TIMEOUT_MS.
+  const rawTimeout = process.env.CCR_UPSTREAM_TIMEOUT_MS;
+  const parsedTimeout = rawTimeout === undefined || rawTimeout === '' ? NaN : Number(rawTimeout);
+  const hasTimeout = Number.isFinite(parsedTimeout) && parsedTimeout >= 0;
+  const timeoutOptions = hasTimeout ? { headersTimeout: Math.trunc(parsedTimeout), bodyTimeout: Math.trunc(parsedTimeout) } : {};
+  try {
+    directDispatcher = new Agent(timeoutOptions as never);
+  } catch {
+    // Fallback: no custom agent, use global dispatcher's direct path.
+    return undefined;
+  }
+  return directDispatcher;
 }
 
 function formatProxyUrl(server: UpstreamProxyServer): string {

@@ -13,7 +13,7 @@ import {
   loadPersistedRuntimeState,
   replacePersistedRuntimeState
 } from "@ccr/core/config/config-repository";
-import type { AppConfig, GatewayNetworkEndpoint } from "@ccr/core/contracts/app";
+import { isGatewayProviderEnabled, type AppConfig, type GatewayNetworkEndpoint } from "@ccr/core/contracts/app";
 import { fetchWithSystemProxy } from "@ccr/core/proxy/system-proxy-fetch";
 import { isRecord, numberValue, stringValue } from "@ccr/core/gateway/internal/value";
 import { formatError, readHeader } from "@ccr/core/gateway/http/io";
@@ -299,12 +299,17 @@ function createGatewayProcessEnv(
     if (key.startsWith("RAW_TRACE_")) delete env[key];
   }
 
+  // Providers with bypassProxy must skip the upstream proxy in the core
+  // gateway. The gateway runtime resolves its per-request dispatcher from
+  // NO_PROXY, so the bypass hosts ride there.
+  const bypassProxyHosts = gatewayBypassProxyHosts(config);
   const noProxy = mergeNoProxy(env.NO_PROXY || env.no_proxy, [
     "127.0.0.1",
     "localhost",
     "::1",
     config.gateway.host,
-    config.gateway.coreHost
+    config.gateway.coreHost,
+    ...(bypassProxyHosts ? bypassProxyHosts.split(",") : [])
   ]);
   env.NO_PROXY = noProxy;
   env.no_proxy = noProxy;
@@ -321,6 +326,30 @@ function createGatewayProcessEnv(
   env.all_proxy = upstreamProxyUrl;
   env.CCR_UPSTREAM_PROXY_URL = upstreamProxyUrl;
   return env;
+}
+
+function gatewayBypassProxyHosts(config: AppConfig): string | undefined {
+  const hosts = new Set<string>();
+  for (const provider of config.Providers) {
+    if (!provider.bypassProxy || !isGatewayProviderEnabled(provider)) {
+      continue;
+    }
+    const candidates = [
+      provider.baseUrl ?? provider.api_base_url ?? provider.baseurl,
+      ...(provider.capabilities ?? []).map((capability) => capability.baseUrl).filter(Boolean)
+    ];
+    for (const raw of candidates) {
+      const value = raw?.trim();
+      if (!value) continue;
+      try {
+        const host = new URL(/^https?:\/\//i.test(value) ? value : `https://${value}`).hostname.toLowerCase();
+        if (host) hosts.add(host);
+      } catch {
+        // Ignore malformed provider URLs; other candidates still apply.
+      }
+    }
+  }
+  return hosts.size > 0 ? [...hosts].join(",") : undefined;
 }
 
 function gatewayUpstreamTimeoutMs(config: AppConfig): number {

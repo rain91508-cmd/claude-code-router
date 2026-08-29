@@ -1721,6 +1721,7 @@ function App() {
       api_key: primaryApiKey,
       autoFetchModels: providerDraft.autoFetchModels || undefined,
       autoFetchKnownModels,
+      bypassProxy: providerDraft.bypassProxy || undefined,
       capabilities: capabilities.length > 0 ? capabilities : undefined,
       account: accountConfig,
       credentials: credentials.length > 0 ? credentials : undefined,

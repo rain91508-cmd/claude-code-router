@@ -166,6 +166,7 @@ export type GatewayProviderConfig = {
   baseUrl?: string;
   baseurl?: string;
   billing?: unknown;
+  bypassProxy?: boolean;
   capabilities?: GatewayProviderCapability[];
   credentials?: ProviderCredentialConfig[];
   extraBody?: unknown;

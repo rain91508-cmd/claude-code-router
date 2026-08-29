@@ -3,7 +3,7 @@
  */
 import { Readable } from "node:stream";
 import type { AppConfig, GatewayProviderConfig, GatewayProviderProtocol, ProviderCredentialConfig, RequestRouteTraceChange, RouterFallbackConfig } from "@ccr/core/contracts/app";
-import { fetchWithSystemProxy } from "@ccr/core/proxy/system-proxy-fetch";
+import { fetchWithSystemProxy, shouldBypassProxyForProvider } from "@ccr/core/proxy/system-proxy-fetch";
 import { createRouteExecutionPlan } from "@ccr/core/routing/execution-plan";
 import { rewriteRouteModelInUrl } from "@ccr/core/routing/protocol-adapter";
 import { modelRegistryForConfig, normalizeRouteSelector, parseProviderModelSelector, providerRuntimeId } from "@ccr/core/routing/model-registry";
@@ -469,12 +469,18 @@ export async function fetchUpstreamWithFallback(input: {
     releaseJsonObject(input.body);
 
     try {
+      const attemptProviderConfig = attempt.target?.kind === "provider"
+        ? attempt.target.provider
+        : attempt.logicalProvider
+          ? findProviderByPublicOrInternalName(input.config, attempt.logicalProvider)
+          : undefined;
+      const bypassProxy = shouldBypassProxyForProvider(attemptProviderConfig);
       const response = await fetchWithSystemProxy(attemptUrl, {
         body: shouldSendBody(input.method) ? attempt.body?.toString("utf8") : undefined,
         headers: upstreamHeaders,
         method: input.method,
         signal: input.signal
-      });
+      }, bypassProxy ? { bypassProxy: true } : undefined);
 
       if (hasNextAttempt && shouldFallbackAfterStatus(response.status, fallbackMode)) {
         const delayMs = retryDelayAfterStatus(response.headers, failedAttempts.length);

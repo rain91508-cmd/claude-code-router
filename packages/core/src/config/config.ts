@@ -1425,6 +1425,7 @@ function parseProviders(value: unknown): GatewayProviderConfig[] | undefined {
         baseUrl: readString(item.baseUrl),
         baseurl: readString(item.baseurl),
         billing: item.billing,
+        bypassProxy: readBoolean(item.bypassProxy ?? item.bypass_proxy) || undefined,
         capabilities: parseProviderCapabilities(item.capabilities)
           ?? parseProviderProtocolCapability(item),
         credentials: parseProviderCredentials(item.credentials ?? item.keys ?? item.apiKeys),

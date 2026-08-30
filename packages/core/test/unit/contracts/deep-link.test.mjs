@@ -187,3 +187,32 @@ test("parseProviderManifestPayload accepts provider wrappers and source fallback
   assert.deepEqual(parsed.models, ["display-model"]);
   assert.deepEqual(parsed.modelDisplayNames, { "display-model": "Display Model" });
 });
+
+test("parseProviderDeepLinkPayload reads per-model protocol restrictions", () => {
+  const payload = {
+    base_url: "https://api.example.com/v1",
+    model_metadata: {
+      "openai-only": { protocols: ["openai_chat_completions"] },
+      "dual": { protocols: ["openai_chat_completions", "anthropic_messages", "openai_chat_completions"] },
+      "blocked": { protocols: [] },
+      "single-string": { protocol: "anthropic_messages" },
+      "junk-only": { protocols: ["bogus"] },
+      "junk-mixed": { protocols: ["bogus", "anthropic_messages"] }
+    },
+    models: ["openai-only", "dual", "blocked", "single-string", "junk-only", "junk-mixed"],
+    name: "Example AI",
+    protocol: "openai_chat_completions"
+  };
+
+  const parsed = parseProviderDeepLinkPayload(`ccr://provider?payload=${base64UrlJson(payload)}`);
+
+  assert.deepEqual(parsed.modelMetadata["openai-only"].protocols, ["openai_chat_completions"]);
+  assert.deepEqual(parsed.modelMetadata.dual.protocols, ["openai_chat_completions", "anthropic_messages"]);
+  // An explicit empty array is meaningful: it blocks every protocol.
+  assert.deepEqual(parsed.modelMetadata.blocked.protocols, []);
+  assert.deepEqual(parsed.modelMetadata["single-string"].protocols, ["anthropic_messages"]);
+  // Unrecognized entries must not collapse into a block-everything set: the
+  // restriction is dropped, and with it the now-empty metadata entry.
+  assert.equal(parsed.modelMetadata["junk-only"], undefined);
+  assert.deepEqual(parsed.modelMetadata["junk-mixed"].protocols, ["anthropic_messages"]);
+});

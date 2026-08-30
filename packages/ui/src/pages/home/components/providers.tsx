@@ -15,7 +15,7 @@ import {
   ProviderConnectivityCheckReport, providerCapabilityBaseUrlForProtocol, providerConnectivityApiKeyFromDraft, providerDeepLinkDisplayIcon, providerDraftHasReadyCredentialPool, providerListItemKey, providerMatchesQuery, ProviderPreset, providerPresetIconUrls, providerProbeHasSupportedProtocol,
   providerDisplayIcon, providerGlobalBaseUrlForProbe, providerModelDisplayName, providerModelDisplayTitle, providerProtocolOptions, providerSelectableProtocolsFromProbe, providerUsageFieldPatch, ProviderUsageFieldTarget, providerUsageMethodOptions, Search, SelectControl, selectedProtocolsForModels,
   RefreshCw, resolveProviderDeepLinkPreset, ShieldCheck, splitLines, Switch, Tabs, TabsList, TabsTrigger, Textarea, Toggle, translatedProviderProtocolLabel, translateOptions,
-  translateProbeProtocolMessage, Trash2, uniqueProviderName, uniqueProviderProtocols, useAppErrorText, useAppText, useEffect, useLayoutEffect, useMemo, intersectModelProtocolsWithProvider,
+  translateProbeProtocolMessage, Trash2, uniqueProviderName, uniqueProviderProtocols, useAppErrorText, useAppText, useEffect, useLayoutEffect, useMemo,
   useRef, useState, X, isGatewayProviderEnabled, isPlainRecord
 } from "../shared/index";
 import { PopoverPortal } from "@/components/ui/popover";
@@ -2042,10 +2042,10 @@ export function AddProviderForm({
       selectedModels
     };
     // When per-model protocol info is known (from a connectivity check),
-    // restrict the provider protocols to the union of what the selected
-    // models actually support, so an OpenAI-only model is not routed over
-    // Anthropic.
-    const restricted = selectedProtocolsForModels(draft.modelMetadata, models);
+    // narrow the provider's selection to what the selected models were
+    // verified to support, so an OpenAI-only model is not routed over
+    // Anthropic. This only ever removes protocols, never adds them.
+    const restricted = selectedProtocolsForModels(draft.modelMetadata, models, draft.selectedProtocols);
     if (restricted && !draft.protocolsManuallyEdited) {
       patch.selectedProtocols = restricted;
     }
@@ -2366,6 +2366,7 @@ export function AddProviderForm({
                 loading={probeLoading}
                 metadata={draft.modelMetadata}
                 onMetadataChange={(modelMetadata) => onChange({ modelMetadata })}
+                onProtocolsManuallyEdited={() => onChange({ protocolsManuallyEdited: true })}
                 onQueryChange={(modelSearch) => onChange({ modelSearch })}
                 onRefresh={onRefreshModels}
                 onSelectedChange={updateConfiguredModels}
@@ -2503,13 +2504,11 @@ export function AddProviderForm({
                                     aria-label={`${t("Add")} ${translatedProviderProtocolLabel(protocol, t)}`}
                                     checked={checked}
                                     onCheckedChange={() => {
-                                      const nextProtocols = checked
-                                        ? draft.selectedProtocols.filter((selected) => selected !== protocol)
-                                        : uniqueProviderProtocols([...draft.selectedProtocols, protocol]);
                                       onChange({
-                                        modelMetadata: intersectModelProtocolsWithProvider(draft.modelMetadata, nextProtocols),
                                         protocolsManuallyEdited: true,
-                                        selectedProtocols: nextProtocols
+                                        selectedProtocols: checked
+                                          ? draft.selectedProtocols.filter((selected) => selected !== protocol)
+                                          : uniqueProviderProtocols([...draft.selectedProtocols, protocol])
                                       });
                                     }}
                                   />
@@ -2539,13 +2538,11 @@ export function AddProviderForm({
                                       if (!selectableProtocol) {
                                         return;
                                       }
-                                      const nextProtocols = checked
-                                        ? draft.selectedProtocols.filter((protocol) => protocol !== selectableProtocol)
-                                        : uniqueProviderProtocols([...draft.selectedProtocols, selectableProtocol]);
                                       onChange({
-                                        modelMetadata: intersectModelProtocolsWithProvider(draft.modelMetadata, nextProtocols),
                                         protocolsManuallyEdited: true,
-                                        selectedProtocols: nextProtocols
+                                        selectedProtocols: checked
+                                          ? draft.selectedProtocols.filter((protocol) => protocol !== selectableProtocol)
+                                          : uniqueProviderProtocols([...draft.selectedProtocols, selectableProtocol])
                                       });
                                     }}
                                   />
@@ -3913,6 +3910,7 @@ function ProviderModelPicker({
   loading = false,
   metadata,
   onMetadataChange,
+  onProtocolsManuallyEdited,
   onQueryChange,
   onRefresh,
   onSelectedChange,
@@ -3928,6 +3926,7 @@ function ProviderModelPicker({
   loading?: boolean;
   metadata?: NonNullable<AddProviderDraft["modelMetadata"]>;
   onMetadataChange: (value: AddProviderDraft["modelMetadata"]) => void;
+  onProtocolsManuallyEdited?: () => void;
   onQueryChange: (value: string) => void;
   onRefresh?: () => void | Promise<unknown>;
   onSelectedChange: (value: string[]) => void;
@@ -4269,6 +4268,7 @@ function ProviderModelPicker({
             metadata={metadata}
             models={visibleAddedModels}
             onChange={onMetadataChange}
+            onProtocolsManuallyEdited={onProtocolsManuallyEdited}
             onRemoveModel={removeModel}
             openRouterDiscountRouting={openRouterDiscountRouting}
             openRouterProviderCatalogRequest={openRouterProviderCatalogRequest}
@@ -4685,6 +4685,7 @@ function ModelMetadataEditor({
   metadata,
   models,
   onChange,
+  onProtocolsManuallyEdited,
   onRemoveModel,
   openRouterDiscountRouting = false,
   openRouterProviderCatalogRequest,
@@ -4699,6 +4700,7 @@ function ModelMetadataEditor({
   metadata?: NonNullable<AddProviderDraft["modelMetadata"]>;
   models: string[];
   onChange: (value: AddProviderDraft["modelMetadata"]) => void;
+  onProtocolsManuallyEdited?: () => void;
   onRemoveModel?: (model: string) => void;
   openRouterDiscountRouting?: boolean;
   openRouterProviderCatalogRequest?: OpenRouterProviderCatalogRequest;
@@ -4850,8 +4852,10 @@ function ModelMetadataEditor({
   function updateModelProtocols(model: string, nextProtocols: GatewayProviderCapabilityProtocol[]) {
     updateMetadata(model, (current) => {
       const next = { ...current };
-      if (nextProtocols.length > 0) next.protocols = [...nextProtocols];
-      else delete next.protocols;
+      // An empty list is meaningful: it blocks every protocol for the model
+      // (matching the runtime), so it is stored rather than collapsed into
+      // "no restriction". "Use provider defaults" is the way back.
+      next.protocols = [...nextProtocols];
       return next;
     });
   }
@@ -5138,6 +5142,7 @@ function ModelMetadataEditor({
                                       ? uniqueProviderProtocols([...current, option.value])
                                       : current.filter((value) => value !== option.value);
                                     updateModelProtocols(model, nextProtocols);
+                                    onProtocolsManuallyEdited?.();
                                   }}
                                 />
                                 <span className="truncate">{t(option.label)}</span>

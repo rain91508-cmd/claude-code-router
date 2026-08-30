@@ -97,3 +97,68 @@ test("protocol without any base URL yields no synthesized capability", async () 
 
   assert.equal(providers[0].capabilities, undefined);
 });
+
+test("per-model protocol restriction accepts the same aliases as other protocol config", async () => {
+  const { parseProvidersForTest } = await import("@ccr/core/config/config.ts");
+  const providers = parseProvidersForTest([
+    {
+      baseUrl: "https://api.example.test/v1",
+      modelMetadata: {
+        "alias-openai": { protocols: ["openai"] },
+        "alias-anthropic": { protocols: ["anthropic"] },
+        "alias-images": { protocols: ["openai_images"] },
+        "canonical": { protocols: ["openai_chat_completions"] },
+        "snake-case": { protocol: "gemini_generate_content" }
+      },
+      models: ["alias-openai", "alias-anthropic", "alias-images", "canonical", "snake-case"],
+      name: "Aliases",
+      type: "openai_chat_completions"
+    }
+  ]);
+
+  // An alias must never collapse into the block-everything empty set.
+  assert.deepEqual(providers?.[0].modelMetadata?.["alias-openai"].protocols, ["openai_responses"]);
+  assert.deepEqual(providers?.[0].modelMetadata?.["alias-anthropic"].protocols, ["anthropic_messages"]);
+  assert.deepEqual(providers?.[0].modelMetadata?.["alias-images"].protocols, ["openai_image_generations"]);
+  assert.deepEqual(providers?.[0].modelMetadata?.["canonical"].protocols, ["openai_chat_completions"]);
+  assert.deepEqual(providers?.[0].modelMetadata?.["snake-case"].protocols, ["gemini_generate_content"]);
+});
+
+test("per-model protocol restriction keeps an explicit empty list and ignores junk", async () => {
+  const { parseProvidersForTest } = await import("@ccr/core/config/config.ts");
+  const providers = parseProvidersForTest([
+    {
+      baseUrl: "https://api.example.test/v1",
+      modelMetadata: {
+        blocked: { protocols: [] },
+        deduped: { protocols: ["openai", "openai_responses", "anthropic"] },
+        "all-junk": { protocols: ["bogus", 42] },
+        "junk-mixed": { protocols: ["bogus", "anthropic"] }
+      },
+      models: ["blocked", "deduped", "all-junk", "junk-mixed"],
+      name: "Edge cases",
+      type: "openai_chat_completions"
+    }
+  ]);
+
+  // An explicit empty array is meaningful: it blocks every protocol.
+  assert.deepEqual(providers?.[0].modelMetadata?.blocked.protocols, []);
+  assert.deepEqual(providers?.[0].modelMetadata?.deduped.protocols, ["openai_responses", "anthropic_messages"]);
+  // A typo must not disable a working model: an unparseable-only list yields no
+  // restriction at all (the metadata entry itself becomes empty and is dropped).
+  assert.equal(providers?.[0].modelMetadata?.["all-junk"], undefined);
+  assert.deepEqual(providers?.[0].modelMetadata?.["junk-mixed"].protocols, ["anthropic_messages"]);
+});
+
+test("provider protocolsManuallyEdited flag is parsed from camel and snake case config", async () => {
+  const { parseProvidersForTest } = await import("@ccr/core/config/config.ts");
+  const providers = parseProvidersForTest([
+    { baseUrl: "https://a.test/v1", models: ["m"], name: "Camel", protocolsManuallyEdited: true },
+    { baseUrl: "https://b.test/v1", models: ["m"], name: "Snake", protocols_manually_edited: true },
+    { baseUrl: "https://c.test/v1", models: ["m"], name: "Unset" }
+  ]);
+
+  assert.equal(providers?.[0].protocolsManuallyEdited, true);
+  assert.equal(providers?.[1].protocolsManuallyEdited, true);
+  assert.equal(providers?.[2].protocolsManuallyEdited, undefined);
+});

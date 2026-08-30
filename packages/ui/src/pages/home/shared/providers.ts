@@ -5,6 +5,7 @@ import openCodeLogoUrl from "@/assets/agent-logos/opencode.ico";
 import zcodeLogoUrl from "@/assets/agent-logos/zcode.png";
 import moonshotProviderIconUrl from "@/assets/provider-icons/moonshot.ico";
 import {
+  isGatewayMediaProtocol,
   ROUTER_SCRIPT_API_VERSION,
   ROUTER_SCRIPT_MAX_TIMEOUT_MS
 } from "@ccr/core/contracts/app";
@@ -781,7 +782,9 @@ export function createProviderDraftFromProvider(provider: GatewayProviderConfig)
     credentialMode: providerDraftHasReadyCredentialPool({ credentials }) ? "pool" : "apiKey",
     credentials,
     icon: provider.icon ?? "",
-    protocolsManuallyEdited: false,
+    // Carry the persisted flag so a manual deselection stays sticky across
+    // save/reopen; auto-detection would otherwise re-add the protocol.
+    protocolsManuallyEdited: provider.protocolsManuallyEdited === true,
     modelDescriptions: modelDescriptionsForModels(provider.modelDescriptions, provider.models),
     modelDisplayNames: modelDisplayNamesForModels(
       mergeModelDisplayNames(providerPresetModelDisplayNames(preset), provider.modelDisplayNames),
@@ -2002,14 +2005,10 @@ export function providerCapabilitiesForSave(
   // a user-selectable (non-media) protocol that is no longer selected — this
   // honors a manual deselection made in the edit form, where the draft's
   // capabilities still list the deselected protocol.
-  const preserved = preservedCapabilities.filter((capability) => {
-    if (capability.type === "openai_image_generations" ||
-      capability.type === "openai_video_generations" ||
-      capability.type === "xai_video_generations") {
-      return true;
-    }
-    return currentCapabilities.some((current) => current.type === capability.type);
-  });
+  const preserved = preservedCapabilities.filter((capability) =>
+    isGatewayMediaProtocol(capability.type) ||
+    currentCapabilities.some((current) => current.type === capability.type)
+  );
   return mergeProviderCapabilities(currentCapabilities, preserved);
 }
 
@@ -2067,11 +2066,7 @@ export function providerCapabilitiesForProtocols(
     })
     .filter((item): item is GatewayProviderCapability => Boolean(item));
 
-  const detectedMediaCapabilities = detectedCapabilities.filter((capability) =>
-    capability.type === "openai_image_generations" ||
-    capability.type === "openai_video_generations" ||
-    capability.type === "xai_video_generations"
-  );
+  const detectedMediaCapabilities = detectedCapabilities.filter((capability) => isGatewayMediaProtocol(capability.type));
   return mergeProviderCapabilities(selectedCapabilities, detectedMediaCapabilities);
 }
 
@@ -2085,7 +2080,7 @@ export function applyProviderProbeResult(draft: AddProviderDraft, probe: Gateway
     : selectedProtocols[0] ?? detectedProtocol;
   const modelDisplayNames = mergeModelDisplayNames(draft.modelDisplayNames, probe.modelDisplayNames);
   const catalogModelMetadata = mergeModelMetadata(draft.catalogModelMetadata, probe.catalogModelMetadata);
-  const modelMetadata = mergeModelMetadataWithProbe(draft.modelMetadata, probe.modelMetadata, selectedProtocols);
+  const modelMetadata = mergeModelMetadataWithProbe(draft.modelMetadata, probe.modelMetadata);
   const accountDraft = providerProbeAccountDraftPatch(draft, probe.account);
   const baseUrl = providerGlobalBaseUrlForProbe(draft.baseUrl, probe, selectedProtocols);
 
@@ -2172,15 +2167,24 @@ export function mergeModelMetadata(
   return Object.keys(merged).length > 0 ? merged : undefined;
 }
 
+/**
+ * Merges per-model metadata from a probe/connectivity check into the draft.
+ *
+ * A model's `protocols` is a *fact about the model* (which protocols it was
+ * verified to answer on), so it is kept intact here rather than being narrowed
+ * by the provider's current protocol selection: the runtime intersects the two
+ * (see `providerCapabilityForClientProtocolWithModel`), and narrowing at edit
+ * time would permanently destroy the verified set when the user re-enables a
+ * provider protocol. A manual per-model selection in the draft wins over the
+ * probe; otherwise the probe's verified set is used.
+ */
 export function mergeModelMetadataWithProbe(
   draftMetadata: Record<string, ProviderModelMetadata> | undefined,
-  probeMetadata: Record<string, ProviderModelMetadata> | undefined,
-  selectedProtocols: GatewayProviderProtocol[]
+  probeMetadata: Record<string, ProviderModelMetadata> | undefined
 ): Record<string, ProviderModelMetadata> | undefined {
   if (!draftMetadata && !probeMetadata) {
     return undefined;
   }
-  const providerSet = new Set<string>(selectedProtocols);
   const merged: Record<string, ProviderModelMetadata> = {};
   // Normalize keys case-insensitively so "GPT-4o" and "gpt-4o" are the same model
   const normalizedToRaw = new Map<string, string>();
@@ -2198,8 +2202,7 @@ export function mergeModelMetadataWithProbe(
     // Case-insensitive lookup for draft/probe so "GPT-4o" matches "gpt-4o"
     const draftEntry = findModelMetadataEntry(draftMetadata, key);
     const probeEntry = findModelMetadataEntry(probeMetadata, key);
-    const base = probeEntry ?? draftEntry;
-    if (!base) {
+    if (!probeEntry && !draftEntry) {
       continue;
     }
     // Merge non-protocol fields: draft wins when present (preserves user edits)
@@ -2207,37 +2210,11 @@ export function mergeModelMetadataWithProbe(
       ...(probeEntry ?? {}),
       ...(draftEntry ?? {})
     };
-    const draftProtocols = draftEntry?.protocols as string[] | undefined;
-    const probeProtocols = probeEntry?.protocols as string[] | undefined;
-    let nextProtocols: GatewayProviderCapabilityProtocol[] | undefined;
-    if (draftProtocols !== undefined) {
-      // User has an explicit per-model selection — honor it, but also honor
-      // the probe's verified set and the provider's selected set via intersection.
-      // An empty array means the intersection blocked all protocols.
-      if (!probeEntry) {
-        const providerFiltered = draftProtocols.filter((protocol) => providerSet.has(protocol)) as GatewayProviderProtocol[];
-        nextProtocols = providerFiltered.length > 0 ? uniqueProviderProtocols(providerFiltered) as GatewayProviderCapabilityProtocol[] : [];
-      } else {
-        const probeSet = probeProtocols ? new Set<string>(probeProtocols) : undefined;
-        const filtered = draftProtocols.filter(
-          (protocol) => providerSet.has(protocol) && (!probeSet || probeSet.has(protocol))
-        ) as GatewayProviderProtocol[];
-        nextProtocols = filtered.length > 0 ? uniqueProviderProtocols(filtered) as GatewayProviderCapabilityProtocol[] : [];
-      }
-    } else if (probeProtocols) {
-      const filtered = (probeProtocols as string[]).filter((protocol) => providerSet.has(protocol)) as GatewayProviderProtocol[];
-      nextProtocols = filtered.length > 0 ? uniqueProviderProtocols(filtered) as GatewayProviderCapabilityProtocol[] : filtered.length === 0 && probeProtocols.length > 0 ? [] : undefined;
-    }
-    if (nextProtocols !== undefined) {
-      if (nextProtocols.length > 0) {
-        next.protocols = nextProtocols;
-      } else if (draftProtocols !== undefined || probeProtocols !== undefined) {
-        // Preserve empty to indicate "no protocol allowed" (both selections blocked all).
-        // An empty set at runtime blocks every protocol instead of falling back to "allow all".
-        next.protocols = [];
-      } else {
-        delete next.protocols;
-      }
+    const draftProtocols = draftEntry?.protocols;
+    const probeProtocols = probeEntry?.protocols;
+    const nextProtocols = draftProtocols ?? probeProtocols;
+    if (nextProtocols) {
+      next.protocols = nextProtocols;
     } else {
       delete next.protocols;
     }
@@ -2257,9 +2234,6 @@ function findModelMetadataEntry(
     return undefined;
   }
   const normalized = model.trim().toLowerCase();
-  if (metadata[model]?.protocols !== undefined || metadata[model.trim()]?.protocols !== undefined) {
-    return metadata[model] ?? metadata[model.trim()];
-  }
   // Exact key first
   if (metadata[model]) {
     return metadata[model];
@@ -2279,71 +2253,84 @@ export function modelMetadataForModels(
   value: Record<string, ProviderModelMetadata> | undefined,
   models: string[]
 ): Record<string, ProviderModelMetadata> | undefined {
-  const modelIds = new Set(models);
-  const entries = Object.entries(value ?? {})
-    .map(([rawModel, metadata]) => [rawModel.trim(), metadata] as const)
-    .filter(([model, metadata]) => model && modelIds.has(model) && metadata && typeof metadata === "object");
+  // Keyed by the configured model id and matched case-insensitively, so a
+  // restriction stored under a differently-cased key ("GPT-4o") still survives
+  // the save filter instead of being silently dropped.
+  const modelIds = new Map(models.map((model) => [model.trim().toLowerCase(), model.trim()]));
+  const entries: Array<[string, ProviderModelMetadata]> = [];
+  for (const [rawModel, metadata] of Object.entries(value ?? {})) {
+    const model = modelIds.get(rawModel.trim().toLowerCase());
+    if (model && metadata && typeof metadata === "object") {
+      entries.push([model, metadata]);
+    }
+  }
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
 /**
- * Returns the union of protocols supported by the models that have stored
- * per-model protocol info (verified via a connectivity check). Returns
- * `undefined` when none of the given models carry protocol info, so callers
- * can leave the provider's protocol selection untouched in that case.
+ * Narrows `currentProtocols` to the protocols the given models were verified to
+ * support. Returns `undefined` when none of the models carry protocol info, so
+ * callers leave the provider's selection untouched.
+ *
+ * The result is always a subset of `currentProtocols`: per-model info may remove
+ * a protocol the models cannot use, but must never add one the provider does not
+ * offer. Models without per-model info do not constrain the result — they simply
+ * keep whatever the provider already selected.
  */
 export function selectedProtocolsForModels(
   modelMetadata: Record<string, ProviderModelMetadata> | undefined,
-  models: string[]
+  models: string[],
+  currentProtocols: GatewayProviderProtocol[]
 ): GatewayProviderProtocol[] | undefined {
-  const metadata = modelMetadata ?? {};
-  const union = new Set<GatewayProviderProtocol>();
-  let hasStored = false;
+  const index = modelProtocolIndex(modelMetadata);
+  if (!index) {
+    return undefined;
+  }
+  let union: Set<GatewayProviderProtocol> | undefined;
   for (const model of models) {
-    const protocols = metadata[model.trim()]?.protocols as GatewayProviderProtocol[] | undefined;
-    if (protocols && protocols.length > 0) {
-      // Only include chat protocols in the union — media protocols are not provider-selectable
-      const chatProtocols = protocols.filter((p): p is GatewayProviderProtocol => (providerProtocolOptions as readonly { value: string }[]).some((opt) => opt.value === p));
-      if (chatProtocols.length > 0) {
-        hasStored = true;
-        for (const protocol of chatProtocols) {
-          union.add(protocol);
-        }
-      }
+    const protocols = index.get(model.trim().toLowerCase());
+    if (!protocols || protocols.length === 0) {
+      continue;
+    }
+    // Only chat protocols are provider-selectable; media origins never widen the set.
+    const chatProtocols = protocols.filter((protocol): protocol is GatewayProviderProtocol =>
+      providerProtocolOptions.some((option) => option.value === protocol));
+    if (chatProtocols.length === 0) {
+      continue;
+    }
+    union ??= new Set<GatewayProviderProtocol>();
+    for (const protocol of chatProtocols) {
+      union.add(protocol);
     }
   }
-  return hasStored ? uniqueProviderProtocols([...union]) : undefined;
+  if (!union) {
+    return undefined;
+  }
+  const narrowed = currentProtocols.filter((protocol) => union.has(protocol));
+  // Never narrow a selection down to nothing — that would silently disable the provider.
+  return narrowed.length > 0 ? uniqueProviderProtocols(narrowed) : undefined;
 }
 
 /**
- * Ensures each model's stored protocol restriction stays within the provider's
- * selected protocols. When the provider drops a protocol, any model that had
- * explicitly selected it loses that selection too (both the provider and the
- * model selection are honored via intersection).
+ * Case-insensitive index of stored per-model protocol lists, keyed by the
+ * lowercased model id. Entries without a protocol list are omitted.
  */
-export function intersectModelProtocolsWithProvider(
-  modelMetadata: Record<string, ProviderModelMetadata> | undefined,
-  providerProtocols: GatewayProviderProtocol[]
-): Record<string, ProviderModelMetadata> | undefined {
-  const providerSet = new Set(providerProtocols as string[]);
-  const entries = Object.entries(modelMetadata ?? {})
-    .map(([model, metadata]) => {
-      if (!metadata.protocols) {
-        return [model, metadata] as const;
-      }
-      const protocols = (metadata.protocols as string[]).filter((protocol) => providerSet.has(protocol));
-      // Both selections are honored via intersection: the model's allowed set
-      // is narrowed to the provider's selected set. When the intersection is
-      // empty the model has no viable protocol (both restrictions together block
-      // all), so we preserve the empty array — at runtime an empty set blocks
-      // every protocol instead of falling back to "allow all".
-      if (protocols.length === metadata.protocols.length) {
-        return [model, metadata] as const;
-      }
-      const nextProtocols = protocols.length > 0 ? uniqueProviderProtocols(protocols as GatewayProviderProtocol[]) : [];
-      return [model, { ...metadata, protocols: nextProtocols as GatewayProviderCapabilityProtocol[] }] as const;
-    });
-  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+function modelProtocolIndex(
+  modelMetadata: Record<string, ProviderModelMetadata> | undefined
+): Map<string, GatewayProviderCapabilityProtocol[]> | undefined {
+  let index: Map<string, GatewayProviderCapabilityProtocol[]> | undefined;
+  for (const [rawModel, metadata] of Object.entries(modelMetadata ?? {})) {
+    const model = rawModel.trim().toLowerCase();
+    const protocols = metadata?.protocols;
+    if (!model || !Array.isArray(protocols)) {
+      continue;
+    }
+    index ??= new Map();
+    if (!index.has(model)) {
+      index.set(model, protocols);
+    }
+  }
+  return index;
 }
 
 export function modelDisplayNamesForModels(

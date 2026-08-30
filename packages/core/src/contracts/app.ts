@@ -183,12 +183,34 @@ export type GatewayProviderConfig = {
   name: string;
   provider?: string;
   protocolDetectionMode?: "auto" | "manual";
+  /**
+   * Set once the user edits the provider's protocol selection by hand. Auto
+   * protocol detection otherwise re-selects every detected protocol, which
+   * would silently undo a manual deselection on the next probe — including
+   * after the provider is saved and reopened.
+   */
+  protocolsManuallyEdited?: boolean;
   transformer?: unknown;
   type?: GatewayProviderProtocol | string;
 };
 
 export function isGatewayProviderEnabled(provider: Pick<GatewayProviderConfig, "enabled">): boolean {
   return provider.enabled !== false;
+}
+
+const gatewayMediaProtocols: ReadonlySet<GatewayProviderCapabilityProtocol> = new Set<GatewayProviderCapabilityProtocol>([
+  "openai_image_generations",
+  "openai_video_generations",
+  "xai_video_generations"
+]);
+
+/**
+ * True for capability protocols that produce media rather than chat turns. Media
+ * origins are never offered as provider-level protocol selections, so callers
+ * that prune or preserve capabilities need to tell them apart.
+ */
+export function isGatewayMediaProtocol(protocol: GatewayProviderCapabilityProtocol): boolean {
+  return gatewayMediaProtocols.has(protocol);
 }
 
 export type ProviderReasoningLevel = {

@@ -35,6 +35,13 @@ const providerProtocols = new Set<GatewayProviderProtocol>([
   "openai_responses"
 ]);
 
+const deepLinkCapabilityProtocols = new Set<string>([
+  ...providerProtocols,
+  "openai_image_generations",
+  "openai_video_generations",
+  "xai_video_generations"
+]);
+
 export function isAppDeepLinkUrl(value: string): boolean {
   return value.trim().toLowerCase().startsWith(`${appDeepLinkProtocol}://`);
 }
@@ -756,29 +763,26 @@ function normalizeDeepLinkReasoningLevels(value: unknown): ProviderModelMetadata
   return levels.length > 0 ? levels : value.length === 0 ? [] : undefined;
 }
 
+/**
+ * Parses a per-model protocol restriction from a deep-link payload. An
+ * explicitly empty array is preserved (it means "no protocol allowed"); a
+ * non-empty list whose entries are all unrecognized yields no restriction, so a
+ * typo in a shared link cannot silently disable an otherwise working model.
+ */
 function normalizeDeepLinkModelProtocols(value: unknown): GatewayProviderCapabilityProtocol[] | undefined {
   const isArray = Array.isArray(value);
   const list = isArray ? value : typeof value === "string" && value ? [value] : undefined;
   if (!list) {
     return undefined;
   }
-  const valid = new Set<string>([
-    "openai_responses",
-    "openai_chat_completions",
-    "openai_image_generations",
-    "openai_video_generations",
-    "anthropic_messages",
-    "gemini_generate_content",
-    "gemini_interactions",
-    "xai_video_generations"
-  ]);
-  const protocols = list
-    .map((item) => (typeof item === "string" ? item.trim() : ""))
-    .filter((item) => item && valid.has(item)) as GatewayProviderCapabilityProtocol[];
-  if (protocols.length > 0) {
-    return [...new Set(protocols)];
+  if (list.length === 0) {
+    return [];
   }
-  return isArray ? [] : undefined;
+  const protocols = list
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => item.trim())
+    .filter((item) => deepLinkCapabilityProtocols.has(item)) as GatewayProviderCapabilityProtocol[];
+  return protocols.length > 0 ? [...new Set(protocols)] : undefined;
 }
 
 function normalizedString(value: unknown): string | undefined {

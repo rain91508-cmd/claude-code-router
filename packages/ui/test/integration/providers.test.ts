@@ -36,6 +36,8 @@ import {
   providerProbeCandidates,
   providerSelectableProtocolsFromProbe,
   removeLocalAgentProviderPluginsForProvider,
+  mergeModelMetadataWithProbe,
+  modelMetadataForModels,
   selectedProtocolsForModels,
   setProviderPresets
 } from "@ccr/ui/pages/home/shared/index.tsx";
@@ -175,7 +177,7 @@ test("provider save drops a deselected protocol from preserved capabilities (edi
   );
 });
 
-test("selectedProtocolsForModels restricts to union of per-model protocols", () => {
+test("selectedProtocolsForModels narrows the provider selection to what models support", () => {
   const modelMetadata = {
     "openai-only-model": {
       protocols: ["openai_chat_completions" as const]
@@ -185,21 +187,48 @@ test("selectedProtocolsForModels restricts to union of per-model protocols", () 
     },
     "unknown-model": {}
   };
+  const both = ["openai_chat_completions" as const, "anthropic_messages" as const];
 
-  // Selecting only the OpenAI-only model keeps openai_chat_completions.
+  // Selecting only the OpenAI-only model narrows the provider to openai_chat_completions.
   assert.deepEqual(
-    selectedProtocolsForModels(modelMetadata, ["openai-only-model"]),
+    selectedProtocolsForModels(modelMetadata, ["openai-only-model"], both),
     ["openai_chat_completions"]
   );
 
   // Selecting both restricts to the union of both protocols.
   assert.deepEqual(
-    selectedProtocolsForModels(modelMetadata, ["openai-only-model", "anthropic-only-model"]),
+    selectedProtocolsForModels(modelMetadata, ["openai-only-model", "anthropic-only-model"], both),
     ["openai_chat_completions", "anthropic_messages"]
   );
 
   // No per-model protocol info -> undefined, leave selection untouched.
-  assert.equal(selectedProtocolsForModels(modelMetadata, ["unknown-model"]), undefined);
+  assert.equal(selectedProtocolsForModels(modelMetadata, ["unknown-model"], both), undefined);
+
+  // Per-model info never ADDS a protocol the provider does not offer.
+  assert.deepEqual(
+    selectedProtocolsForModels(modelMetadata, ["anthropic-only-model"], ["openai_chat_completions" as const]),
+    undefined
+  );
+  assert.deepEqual(
+    selectedProtocolsForModels(
+      { "gemini-model": { protocols: ["gemini_generate_content" as const] } },
+      ["gemini-model"],
+      both
+    ),
+    undefined
+  );
+
+  // A model without info does not constrain the selection of a co-selected model.
+  assert.deepEqual(
+    selectedProtocolsForModels(modelMetadata, ["openai-only-model", "unknown-model"], both),
+    ["openai_chat_completions"]
+  );
+
+  // Keys are matched case-insensitively.
+  assert.deepEqual(
+    selectedProtocolsForModels({ "OpenAI-Only-Model": { protocols: ["openai_chat_completions" as const] } }, ["openai-only-model"], both),
+    ["openai_chat_completions"]
+  );
 });
 
 test("provider probe result drops unavailable selected protocols", () => {
@@ -1634,3 +1663,89 @@ function providerInstallLinkPayload(link) {
   const bytes = Uint8Array.from(atob(padded), (char) => char.charCodeAt(0));
   return JSON.parse(new TextDecoder().decode(bytes));
 }
+
+test("mergeModelMetadataWithProbe keeps the verified per-model protocols intact", () => {
+  // A provider protocol being deselected must not destroy what the model was
+  // verified to support — the runtime intersects the two, and re-enabling the
+  // provider protocol has to restore the model's original set.
+  const merged = mergeModelMetadataWithProbe(
+    { "m": { protocols: ["anthropic_messages" as const] } },
+    { "m": { protocols: ["anthropic_messages" as const] } },
+  );
+
+  assert.deepEqual(merged?.m?.protocols, ["anthropic_messages"]);
+});
+
+test("mergeModelMetadataWithProbe prefers a manual per-model selection over the probe", () => {
+  const merged = mergeModelMetadataWithProbe(
+    { "m": { protocols: ["openai_chat_completions" as const] } },
+    { "m": { protocols: ["anthropic_messages" as const, "openai_chat_completions" as const] } }
+  );
+
+  assert.deepEqual(merged?.m?.protocols, ["openai_chat_completions"]);
+});
+
+test("mergeModelMetadataWithProbe takes the probe's verified set when the draft has none", () => {
+  const merged = mergeModelMetadataWithProbe(
+    { "m": { contextWindow: 1000 } },
+    { "m": { protocols: ["openai_chat_completions" as const] } }
+  );
+
+  assert.deepEqual(merged?.m?.protocols, ["openai_chat_completions"]);
+  assert.equal(merged?.m?.contextWindow, 1000);
+});
+
+test("mergeModelMetadataWithProbe keeps an explicit block-all selection", () => {
+  const merged = mergeModelMetadataWithProbe(
+    { "m": { protocols: [] } },
+    { "m": { protocols: ["anthropic_messages" as const] } }
+  );
+
+  assert.deepEqual(merged?.m?.protocols, []);
+});
+
+test("mergeModelMetadataWithProbe matches model keys case-insensitively", () => {
+  const merged = mergeModelMetadataWithProbe(
+    { "GPT-4o": { protocols: ["openai_chat_completions" as const] } },
+    { "gpt-4o": { contextWindow: 128000 } }
+  );
+
+  assert.equal(Object.keys(merged ?? {}).length, 1);
+  assert.deepEqual(Object.values(merged ?? {})[0]?.protocols, ["openai_chat_completions"]);
+  assert.equal(Object.values(merged ?? {})[0]?.contextWindow, 128000);
+});
+
+test("modelMetadataForModels keeps restrictions stored under a differently-cased key", () => {
+  const filtered = modelMetadataForModels(
+    { "GPT-4o": { protocols: ["openai_chat_completions" as const] } },
+    ["gpt-4o"]
+  );
+
+  // Re-keyed to the configured model id so the restriction survives the save.
+  assert.deepEqual(filtered, { "gpt-4o": { protocols: ["openai_chat_completions"] } });
+});
+
+test("applyProviderProbeResult keeps a verified model protocol when the provider deselects it", () => {
+  const draft = {
+    ...createProviderDraft([]),
+    baseUrl: "https://api.example.test/v1",
+    modelMetadata: { "m": { protocols: ["anthropic_messages" as const] } },
+    protocol: "anthropic_messages" as const,
+    protocolsManuallyEdited: true,
+    selectedProtocols: ["openai_chat_completions" as const]
+  };
+  const probe = {
+    capabilities: [{ baseUrl: "https://api.example.test/v1", source: "detected" as const, type: "openai_chat_completions" as const }],
+    detectedProtocol: "openai_chat_completions" as const,
+    models: [],
+    normalizedBaseUrl: "https://api.example.test/v1",
+    protocols: [
+      { endpoint: "https://api.example.test/v1/chat/completions", message: "", protocol: "openai_chat_completions" as const, status: 200, supported: true }
+    ]
+  } as unknown as import("@ccr/ui/pages/home/shared/index.tsx").GatewayProviderProbeResult;
+
+  const next = applyProviderProbeResult(draft, probe);
+
+  assert.deepEqual(next.selectedProtocols, ["openai_chat_completions"]);
+  assert.deepEqual(next.modelMetadata?.["m"]?.protocols, ["anthropic_messages"]);
+});

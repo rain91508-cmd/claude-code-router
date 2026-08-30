@@ -1443,6 +1443,7 @@ function parseProviders(value: unknown): GatewayProviderConfig[] | undefined {
         name,
         provider: readString(item.provider),
         protocolDetectionMode: parseEnumValue(item.protocolDetectionMode, ["auto", "manual"], undefined),
+        protocolsManuallyEdited: readBoolean(item.protocolsManuallyEdited ?? item.protocols_manually_edited) || undefined,
         transformer: item.transformer,
         type: readString(item.type)
       };
@@ -1550,29 +1551,28 @@ function parseProviderModelMetadata(value: unknown): ProviderModelMetadata | und
   return Object.keys(metadata).length > 0 ? metadata : undefined;
 }
 
+/**
+ * Parses the per-model protocol restriction list. Values accept the same
+ * aliases as every other protocol in this file (`"openai"`, `"anthropic"`,
+ * `"openai_images"`, …) so a hand-written config is not silently narrowed to a
+ * block-everything empty set. An explicitly empty array is preserved: it means
+ * "no protocol allowed". A non-empty list whose entries are all unrecognized is
+ * treated as no restriction, so a typo cannot disable a working model.
+ */
 function parseProviderModelProtocols(value: unknown): GatewayProviderCapabilityProtocol[] | undefined {
   const isArray = Array.isArray(value);
   const list = isArray ? value : typeof value === "string" && value ? [value] : undefined;
   if (!list) {
     return undefined;
   }
-  const valid = new Set<GatewayProviderCapabilityProtocol>([
-    "openai_responses",
-    "openai_chat_completions",
-    "openai_image_generations",
-    "openai_video_generations",
-    "anthropic_messages",
-    "gemini_generate_content",
-    "gemini_interactions",
-    "xai_video_generations"
-  ]);
-  const protocols = list
-    .map((item) => (typeof item === "string" ? (item.trim() as GatewayProviderCapabilityProtocol) : undefined))
-    .filter((item): item is GatewayProviderCapabilityProtocol => Boolean(item) && valid.has(item as GatewayProviderCapabilityProtocol));
-  if (protocols.length > 0) {
-    return [...new Set(protocols)];
+  if (list.length === 0) {
+    return [];
   }
-  return isArray ? [] : undefined;
+  const protocols = list
+    .filter((item): item is string => typeof item === "string")
+    .map((item) => parseProviderCapabilityProtocol(item))
+    .filter((item): item is GatewayProviderCapabilityProtocol => Boolean(item));
+  return protocols.length > 0 ? [...new Set(protocols)] : undefined;
 }
 
 function parseOpenRouterDiscountRouting(value: unknown): ProviderModelMetadata["openRouterDiscountRouting"] {

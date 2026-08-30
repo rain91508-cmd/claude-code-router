@@ -23,7 +23,7 @@ import {
   OverviewWidgetConfig, parseProviderAccountDraft, pluginConfigPatchFromSettingsDraft,
   providerCredentialsFromDraft,
   persistLanguagePreference, PluginInstallCandidate, PluginMarketplaceEntry, PluginRoutingConfigTarget, PluginSettingsDraft, presetCapabilitiesFromDraft,
-  probeProviderCandidates, probeProviderDeepLinkPayload, profileAgentLabel, profileAgentOptionsForRuntime, profileDraftWithDetectedAppPath, profileEnvRowsForAgent, ProfileConfig, ProfileOpenSurface, ProfileRuntimeStatus, profileConfigFromDraft, providerAccountApiKeySafetyIssue, intersectModelProtocolsWithProvider,
+  probeProviderCandidates, probeProviderDeepLinkPayload, profileAgentLabel, profileAgentOptionsForRuntime, profileDraftWithDetectedAppPath, profileEnvRowsForAgent, ProfileConfig, ProfileOpenSurface, ProfileRuntimeStatus, profileConfigFromDraft, providerAccountApiKeySafetyIssue,
   profileOpenCommandFallback, profileOpenSurfaces, ProviderAccountSnapshot, providerApiKeySafetyIssue, ProviderConnectivityCheckReport, ProviderDeepLinkPayload, ProviderDeepLinkRequest, providerIdentitySafetyIssue, providerProbeCandidates,
   providerAutoFetchKnownModelsForSave, providerBaseUrl, providerCapabilitiesForProtocols, providerCapabilitiesForSave, providerConnectivityApiKeyFromDraft, providerConnectivityProviderPlugins, providerGlobalBaseUrlForProbe, providerProbeCandidatesApiKeySafetyIssue, providerProbeHasSupportedProtocol, providerProbeInputKey, providerProtocolOptions, providerSelectableProtocolsFromProbe, ProxyNetworkSnapshot,
   ProxyStatus, readLanguagePreference, RequestLogListFilter, RequestLogPage, ResolvedLanguage,
@@ -1574,7 +1574,7 @@ function App() {
       if (report.modelMetadata) {
         setProviderDraft((current) => ({
           ...current,
-          modelMetadata: mergeModelMetadataWithProbe(current.modelMetadata, report.modelMetadata, current.selectedProtocols)
+          modelMetadata: mergeModelMetadataWithProbe(current.modelMetadata, report.modelMetadata)
         }));
       }
 
@@ -1648,8 +1648,7 @@ function App() {
     const fallbackBaseUrl = providerGlobalBaseUrlForProbe(providerDraft.baseUrl, saveProbe, protocolsToSave);
     const modelDescriptions = modelDescriptionsForModels(providerDraft.modelDescriptions, models);
     const modelDisplayNames = modelDisplayNamesForModels(providerDraft.modelDisplayNames, models);
-    const rawModelMetadata = modelMetadataForModels(providerDraft.modelMetadata, models);
-    const modelMetadata = rawModelMetadata ? intersectModelProtocolsWithProvider(rawModelMetadata, protocolsToSave) ?? rawModelMetadata : undefined;
+    const modelMetadata = modelMetadataForModels(providerDraft.modelMetadata, models);
     const existingProvider = providerEditIndex !== undefined ? draftConfig.Providers[providerEditIndex] : undefined;
     const capabilities = providerCapabilitiesForSave(
       providerCapabilitiesForProtocols(providerDraft.baseUrl, protocolsToSave, saveProbe, presetCapabilitiesFromDraft(providerDraft)),
@@ -1734,6 +1733,7 @@ function App() {
       models,
       name: providerName,
       protocolDetectionMode: providerDraft.protocolDetectionMode === "manual" ? "manual" : undefined,
+      protocolsManuallyEdited: providerDraft.protocolsManuallyEdited || undefined,
       type: protocol
     };
     const importedProviderPlugins = materializeProviderPluginTemplates(providerDraft.providerPlugins, providerName, protocol, providerId);

@@ -1,8 +1,8 @@
 /**
  * Extracted from gateway/service.ts. Keep this module focused on its named gateway boundary.
  */
-import { isGatewayProviderEnabled } from "@ccr/core/contracts/app";
-import type { AppConfig, GatewayProviderCapability, GatewayProviderCapabilityProtocol, GatewayProviderConfig, GatewayProviderProtocol, ProviderCredentialConfig } from "@ccr/core/contracts/app";
+import { isGatewayMediaProtocol, isGatewayProviderEnabled } from "@ccr/core/contracts/app";
+import type { AppConfig, GatewayProviderCapability, GatewayProviderCapabilityProtocol, GatewayProviderConfig, GatewayProviderProtocol, ProviderCredentialConfig, ProviderModelMetadata } from "@ccr/core/contracts/app";
 import { findProviderPresetByBaseUrl, providerApiKeySafetyIssue } from "@ccr/core/providers/presets/index";
 import { normalizeProviderBaseUrl as normalizeProviderBaseUrlInput } from "@ccr/core/providers/url";
 import { modelRegistryForConfig, parseProviderModelSelector, providerRuntimeId } from "@ccr/core/routing/model-registry";
@@ -12,16 +12,7 @@ export function providerCapabilityForClientProtocol(
   provider: GatewayProviderConfig,
   clientProtocol: GatewayProviderProtocol
 ): (GatewayProviderCapability & { type: GatewayProviderProtocol }) | undefined {
-  const capabilities = normalizedProviderCapabilities(provider);
-  for (const protocol of providerProtocolPreferenceForClient(clientProtocol)) {
-    const capability = capabilities.find(
-      (item): item is GatewayProviderCapability & { type: GatewayProviderProtocol } => item.type === protocol
-    );
-    if (capability) {
-      return capability;
-    }
-  }
-  return undefined;
+  return providerCapabilityForClientProtocolWithModel(provider, clientProtocol);
 }
 
 /**
@@ -59,12 +50,50 @@ export function providerCapabilityForClientProtocolWithModel(
 }
 
 /**
+ * Case-insensitive index of the per-model protocol restrictions declared on a
+ * provider, keyed by the lowercased metadata key. Built lazily and memoized per
+ * metadata object identity so the common case (a model with no restriction) does
+ * not rescan every entry on every request.
+ */
+const modelProtocolIndexCache = new WeakMap<
+  Record<string, ProviderModelMetadata>,
+  { index: Map<string, GatewayProviderCapabilityProtocol[]> | undefined }
+>();
+
+function modelProtocolIndex(
+  metadata: Record<string, ProviderModelMetadata>
+): Map<string, GatewayProviderCapabilityProtocol[]> | undefined {
+  const cached = modelProtocolIndexCache.get(metadata);
+  if (cached) {
+    return cached.index;
+  }
+  let index: Map<string, GatewayProviderCapabilityProtocol[]> | undefined;
+  for (const [key, entry] of Object.entries(metadata)) {
+    const protocols = entry?.protocols;
+    if (!Array.isArray(protocols)) {
+      continue;
+    }
+    const normalized = key.trim().toLowerCase();
+    if (!normalized) {
+      continue;
+    }
+    index ??= new Map();
+    if (!index.has(normalized)) {
+      index.set(normalized, protocols);
+    }
+  }
+  modelProtocolIndexCache.set(metadata, { index });
+  return index;
+}
+
+/**
  * Returns the set of protocols a model may use on a provider, or `undefined`
  * when the model has no per-model restriction (so all provider protocols are
  * allowed). The allowed set is taken from
- * `provider.modelMetadata[model].protocols`.
+ * `provider.modelMetadata[model].protocols`. An explicitly empty array yields an
+ * empty set, which blocks every protocol.
  */
-export function modelProtocolRestriction(
+function modelProtocolRestriction(
   provider: GatewayProviderConfig,
   model?: string
 ): Set<GatewayProviderCapabilityProtocol> | undefined {
@@ -75,23 +104,15 @@ export function modelProtocolRestriction(
   if (!metadata) {
     return undefined;
   }
-  const normalized = model.trim().toLowerCase();
-  let protocols = metadata[model]?.protocols ?? metadata[model.trim()]?.protocols;
-  if (!protocols) {
+  const trimmed = model.trim();
+  let protocols = metadata[trimmed]?.protocols;
+  if (!Array.isArray(protocols)) {
     // Case/whitespace-insensitive fallback: the request model name may not match
     // the stored metadata key exactly (e.g. "GPT-4o" vs "gpt-4o").
-    for (const [key, entry] of Object.entries(metadata)) {
-      if (key.trim().toLowerCase() === normalized) {
-        protocols = entry.protocols;
-        break;
-      }
-    }
+    protocols = modelProtocolIndex(metadata)?.get(trimmed.toLowerCase());
   }
-  if (!protocols) {
+  if (!Array.isArray(protocols)) {
     return undefined;
-  }
-  if (protocols.length === 0) {
-    return new Set();
   }
   return new Set(protocols);
 }
@@ -106,7 +127,7 @@ export function providerProtocolForClientProtocolWithModel(
   provider: GatewayProviderConfig,
   clientProtocol: GatewayProviderProtocol,
   model?: string
-): GatewayProviderCapabilityProtocol | undefined {
+): GatewayProviderProtocol | undefined {
   const capability = providerCapabilityForClientProtocolWithModel(provider, clientProtocol, model);
   if (capability) {
     return capability.type;
@@ -207,12 +228,47 @@ export function toCoreGatewayProviders(provider: GatewayProviderConfig): CoreGat
   }
   const capabilities = normalizedProviderCapabilities(provider);
   if (capabilities.length === 0) {
-    return toCoreGatewayProvidersForCapability(provider);
+    return toCoreGatewayProvidersForCapability(provider)
+      .map((coreProvider) => withModelProtocolRestrictions(coreProvider, provider))
+      .filter((item): item is CoreGatewayProvider => Boolean(item));
   }
 
   return capabilities
     .flatMap((capability) => toCoreGatewayProvidersForCapability(provider, capability))
+    .map((coreProvider) => withModelProtocolRestrictions(coreProvider, provider))
     .filter((item): item is CoreGatewayProvider => Boolean(item));
+}
+
+/**
+ * Drops models a compiled runtime provider may not serve, based on
+ * `provider.modelMetadata[model].protocols`. Each compiled provider carries a
+ * single `type`, so a model whose allowed set excludes that type must not be
+ * advertised by it — otherwise a request that the selector-rewriting layer
+ * declined to pin would still reach the disallowed protocol. Runtime providers
+ * left with no servable models are dropped entirely.
+ *
+ * Media origins are exempt: a per-model list is produced by chat connectivity
+ * checks, which never probe media protocols, so its absence from that list is
+ * not evidence the model cannot generate images or video.
+ */
+function withModelProtocolRestrictions(
+  coreProvider: CoreGatewayProvider,
+  provider: GatewayProviderConfig
+): CoreGatewayProvider | undefined {
+  if (isGatewayMediaProtocol(coreProvider.type)) {
+    return coreProvider;
+  }
+  const models = coreProvider.models.filter((model) => {
+    const allowed = modelProtocolRestriction(provider, model);
+    return !allowed || allowed.has(coreProvider.type);
+  });
+  if (models.length === coreProvider.models.length) {
+    return coreProvider;
+  }
+  if (models.length === 0) {
+    return undefined;
+  }
+  return { ...coreProvider, models };
 }
 
 function toCoreGatewayProvidersForCapability(

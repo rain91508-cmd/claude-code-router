@@ -14,6 +14,7 @@ import type {
   GatewayProviderProtocol,
   ProviderModelMetadata
 } from "@ccr/core/contracts/app";
+import { isGatewayMediaProtocol } from "@ccr/core/contracts/app";
 import { codexDefaultBaseUrl, readCodexAuth } from "@ccr/core/agents/local-providers/codex";
 import { localAgentProviderApiKey } from "@ccr/core/agents/local-providers/shared";
 import { findProviderPresetByBaseUrl, providerApiKeySafetyIssue } from "@ccr/core/providers/presets/index";
@@ -1701,13 +1702,7 @@ function protocolModelSource(protocol: GatewayProviderCapabilityProtocol): Model
 }
 
 function isChatProtocol(protocol: GatewayProviderCapabilityProtocol): protocol is GatewayProviderProtocol {
-  return protocol !== "openai_image_generations" &&
-    protocol !== "openai_video_generations" &&
-    protocol !== "xai_video_generations";
-}
-
-function isMediaProtocol(protocol: GatewayProviderCapabilityProtocol): boolean {
-  return !isChatProtocol(protocol);
+  return !isGatewayMediaProtocol(protocol);
 }
 
 function orderedProtocolFallback(allowedProtocols: GatewayProviderCapabilityProtocol[] = []): GatewayProviderProtocol | undefined {
@@ -1864,7 +1859,7 @@ export function isProviderProtocolEndpointSupportedForProbe(
 
   if (status === 401 || status === 403) {
     const normalized = message.toLowerCase();
-    const hintMatches = isMediaProtocol(protocol)
+    const hintMatches = isGatewayMediaProtocol(protocol)
       ? status === 401 || hints.includes(protocol)
       : hints.length === 0 || protocolMatchesHints(protocol, hints);
     return hintMatches &&

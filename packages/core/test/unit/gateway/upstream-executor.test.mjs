@@ -669,3 +669,80 @@ test("runtime routing honors per-model protocol restriction (real gateway path)"
     "openai-restricted model must not be routed over anthropic_messages"
   );
 });
+
+test("pinned provider headers honor the per-model protocol restriction", () => {
+  const config = {
+    Providers: [
+      {
+        capabilities: [
+          { baseUrl: "https://provider.example/v1", type: "openai_chat_completions" },
+          { baseUrl: "https://provider.example", type: "anthropic_messages" }
+        ],
+        credentials: [{ apiKey: "key", id: "dual-main" }],
+        id: "dual",
+        modelMetadata: { "openai-only": { protocols: ["openai_chat_completions"] } },
+        models: ["openai-only"],
+        name: "Dual"
+      }
+    ],
+    Router: { fallback: { mode: "off", models: [], retryCount: 0 }, rules: [] },
+    virtualModelProfiles: []
+  };
+
+  // A client pinning the provider by name must still be moved off the protocol
+  // the model is not allowed to use.
+  for (const header of ["x-target-provider", "x-target-providers", "x-gateway-target-provider"]) {
+    const attempt = prepareGatewayUpstreamAttemptForTest({
+      body: { messages: [], model: "openai-only" },
+      config,
+      headers: { [header]: "Dual" },
+      method: "POST",
+      path: "/v1/messages",
+      routedModel: "openai-only"
+    });
+    assert.ok(
+      String(attempt.routedModel).includes("openai_chat_completions"),
+      `${header}: expected the openai capability selector, got ${attempt.routedModel}`
+    );
+    assert.ok(
+      !String(attempt.routedModel).includes("anthropic_messages"),
+      `${header}: must not pin a protocol the model is not allowed to use`
+    );
+  }
+});
+
+test("a model blocked on every protocol is not pinned to any capability", () => {
+  const config = {
+    Providers: [
+      {
+        capabilities: [
+          { baseUrl: "https://provider.example/v1", type: "openai_chat_completions" },
+          { baseUrl: "https://provider.example", type: "anthropic_messages" }
+        ],
+        credentials: [{ apiKey: "key", id: "dual-main" }],
+        id: "dual",
+        modelMetadata: { "blocked": { protocols: [] } },
+        models: ["blocked"],
+        name: "Dual"
+      }
+    ],
+    Router: { fallback: { mode: "off", models: [], retryCount: 0 }, rules: [] },
+    virtualModelProfiles: []
+  };
+
+  const attempt = prepareGatewayUpstreamAttemptForTest({
+    body: { messages: [], model: "blocked" },
+    config,
+    headers: {},
+    method: "POST",
+    path: "/v1/messages",
+    routedModel: "blocked"
+  });
+
+  // Nothing is pinned, so the request cannot reach a disallowed protocol: the
+  // compiled runtime provider list also omits the model (see
+  // runtime-topology-model-protocols.test.mjs), leaving no route for it.
+  assert.equal(attempt.credentialProtocol, undefined);
+  assert.equal(attempt.headers["x-target-provider"], undefined);
+  assert.ok(!String(attempt.headers["x-target-providers"] ?? "").includes("anthropic_messages"));
+});
